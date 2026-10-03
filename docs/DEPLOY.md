@@ -1,0 +1,164 @@
+# Deploying — the server off localhost
+
+The operational half of Chapter 14. `CHANGELOG.md` has the reasoning; this is
+the runbook. `fly.toml` is the configuration itself, and its comments say why
+each setting is what it is.
+
+## The shape, and why it is not negotiable
+
+One always-on machine, one region, one volume. That is not a starting point to
+scale from later — it is what the code currently *is*:
+
+- `sessions.py` keeps conversations in this process's memory, so a conversation's
+  link only means anything to the machine that minted it. A second instance
+  would 404 half the links.
+- The transport is a long-lived WebSocket carrying PCM in both directions, so
+  nothing serverless can host it.
+
+Persistence across restarts, and with it more than one machine, is a later
+chapter. Until then, restarting the server loses every conversation, exactly as
+it always has.
+
+## First time
+
+```bash
+brew install flyctl          # or: curl -L https://fly.io/install.sh | sh
+fly auth login
+
+fly launch --no-deploy --copy-config --name ai-apprentice --region iad
+fly volumes create data --region iad --size 1
+```
+
+`--copy-config` keeps the `fly.toml` in this repo rather than generating one.
+Change `app` in `fly.toml` if that name is taken — Fly app names are unique across all of Fly.io, not just your organisation, which is how
+`voice-agent-demo` turned out to be gone.
+
+### Secrets
+
+Never in `fly.toml`, never in the image — `fly secrets set` holds them and
+restarts the machine with them in the environment.
+
+```bash
+fly secrets set \
+  ASSEMBLYAI_API_KEY=...   `# ears (chapter 12)` \
+  ELEVENLABS_API_KEY=...   `# voice (chapter 2)` \
+  DEEPSEEK_API_KEY=...     `# reasoning (chapter 1)`
+```
+
+`VOICE_AGENT_ADMIN_KEY` turns on `/admin` (chapter 29); unset, every admin route
+is a 404. Open `https://<app>.fly.dev/admin?key=<key>` once and the key is
+traded for a cookie. It also keys the visitor hash in the records, so rotating
+it makes every returning visitor look new.
+
+The key lives in your local `.env` (gitignored, and kept out of the image by
+`.dockerignore`), which is where you read it from to sign in. Fly never sees
+`.env`, so copy the value across. Piped, so it never appears on a command line
+or in shell history:
+
+```bash
+grep '^VOICE_AGENT_ADMIN_KEY=' .env | fly secrets import
+```
+
+**Which keys are set decides what visitors can pick.** The start screen offers
+the models named in `llm/registry.py`, and only those whose provider holds a key
+here — so adding `DEEPSEEK_API_KEY` puts the three DeepSeek tiers on the start
+screen, and removing a key takes its models off it. Since chapter 19 the model
+is chosen per conversation on that screen, so no environment variable names a
+default: it is Haiku 4.5. `VOICE_AGENT_STT` still names the default ears.
+
+A backend with no key is never offered, because offering one that cannot be
+built is offering an error.
+
+## Deploying
+
+```bash
+scripts/pull-fly.sh   # first: keep the logs and records the deploy would lose
+fly deploy
+fly logs
+```
+
+The deploy does not cut traffic over until `/healthz` returns 200, which it does
+only once the VAD model is loaded and the reasoning connections are open.
+
+## Checking it
+
+```bash
+curl -fsS https://ai-apprentice.fly.dev/healthz   # ok
+fly status                                      # one machine, passing
+fly ssh console -C 'ls /data/sessions /data/traces'
+```
+
+Then open the URL in a browser and actually talk to it. `uv run verify` and a
+container that starts prove nothing about whether the voice arrives in one
+piece over a real network (AGENTS.md §6).
+
+## The caps
+
+`limits.py` explains what each one bounds and why a public address needs it.
+They are set in `fly.toml` and are **off everywhere else**, so a local run is
+still the agent of chapters 1-13:
+
+| Variable | Deployed | Bounds |
+| --- | --- | --- |
+| `VOICE_AGENT_MAX_LIVE` | 4 | conversations held open at once, and judge rulings running at once |
+| `VOICE_AGENT_SESSION_BUDGET` | 1800 | seconds before a conversation ends itself (30 min) |
+| `VOICE_AGENT_MINTS_PER_IP` | 10 | new conversations per address per 10 minutes |
+| `VOICE_AGENT_MAX_STORED` | 500 | conversations kept before the oldest is dropped |
+
+To change one, edit `fly.toml` and `fly deploy` — they live with the rest of the
+deployment's configuration rather than as loose secrets.
+
+## What is written down, and how to delete it
+
+The deployed instance **records**, and the page says so before anybody speaks.
+On the 1 GB volume at `/data`:
+
+- `/data/sessions/<date>-<id>.md` — the conversation: what was said and typed,
+  the timings, the decisions, what each part cost.
+- `/data/logs/voice-agent.log*` — the server's log (`VOICE_AGENT_LOGS`), INFO
+  and above, UTC. Rotated at 5 MB, ten old files kept: ~55 MB at most, oldest
+  dropped first. Fly's own `fly logs --no-tail` holds only ~100 lines and loses
+  them on every deploy; this does not. Some warnings quote a few words of a
+  reply.
+
+- `/data/traces/*.jsonl` — the span-tree trace (`VOICE_AGENT_TRACE`), always
+  on (AGENTS.md §10): whole prompts, replies and the model's reasoning, one
+  file per server start. It is what explains a live failure; off from
+  2026-09-23 to 2026-09-30, it left 13 empty DeepSeek replies unexplained.
+  It grows with no expiry: an estimated 1 MB an hour of conversation, most of it the
+  page's messages and the mic level (Chapter 30). Check `du -sh /data/traces`
+  beside the sessions, and purge both when the volume fills.
+
+**No audio is ever written.** Binary frames are counted and discarded
+(Chapter 10).
+
+Nothing expires. The delete is the one the CLI has always had:
+
+```bash
+fly ssh console            # then, on the machine:
+#   uv run --no-sync voice-agent --purge-sessions   (records and traces; it asks
+#                                                    first, so not via -C)
+#   rm -rf /data/logs                                (the log files)
+```
+
+**Copies kept locally.** `scripts/pull-fly.sh` downloads Fly's log buffer, the
+log files, every session record and the traces into `fly-archive/` (gitignored). It runs
+before every deploy. A purge on the machine does not reach that copy: delete
+`fly-archive/` too.
+
+To run the public instance without conversation records, set
+`VOICE_AGENT_SESSIONS` to `off` in `fly.toml`. The page's notice follows the
+setting, so it cannot claim one while doing the other. The trace stays on
+(AGENTS.md §10) and still holds the words.
+
+## Running the image locally
+
+Worth doing before every deploy: it is the only check that catches the system
+prompt failing to resolve, which happens at the first request rather than at
+build time.
+
+```bash
+docker build -t voice-agent .
+docker run --rm -p 8000:8000 --env-file .env voice-agent
+curl -fsS localhost:8000/healthz
+```

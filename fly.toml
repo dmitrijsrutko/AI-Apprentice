@@ -1,0 +1,90 @@
+# Chapter 14: the server leaves localhost.
+#
+# One always-on machine, in one region, with a volume. Not a shape chosen for
+# elegance — it is what the code already is. `SessionStore` holds conversations
+# in this process's memory, the greeting's PCM and the reasoning connection are
+# per-process, and a conversation's link is only meaningful to the machine that
+# minted it. A second instance would serve 404s for half the links, and a
+# machine that stops would pay the 3.1 s synthesis cold start on somebody's
+# first hello. Persistence across restarts is its own chapter; until then, one
+# machine that stays up is the honest configuration rather than the lazy one.
+
+app = "ai-apprentice"
+primary_region = "iad"
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # The microphone is the whole point and `getUserMedia` refuses to run outside
+  # a secure context, so a plain-HTTP page here would load with no ears at all.
+
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  # Zero would be cheaper and wrong. See the note at the top: a cold start is
+  # paid by whoever arrives first, and in a demo that is always a visitor.
+
+  [http_service.concurrency]
+    type = "connections"
+    # Each conversation is one long-lived WebSocket, so Fly's own idea of "load"
+    # has to be counted in connections rather than requests. Well above
+    # VOICE_AGENT_MAX_LIVE, because turning people away is that cap's job — it
+    # does it at the socket, with a reason the page can show, where this would
+    # do it anonymously at the proxy.
+    soft_limit = 25
+    hard_limit = 50
+
+[[http_service.checks]]
+  grace_period = "20s"
+  interval = "15s"
+  timeout = "5s"
+  method = "GET"
+  path = "/healthz"
+  # 503 until the greeting is synthesised and the engine connected, so a
+  # deploy does not cut traffic over to a machine that would make the next
+  # visitor wait for hello.
+
+[mounts]
+  source = "data"
+  destination = "/data"
+  # Without this, `sessions/` and `traces/` live on the container's own disk and
+  # are destroyed by every deploy — persistence that is not persistence, which
+  # is worse than none because nothing says so.
+
+[env]
+  VOICE_AGENT_HOST = "0.0.0.0"
+  VOICE_AGENT_PORT = "8000"
+
+  # No reasoning engine is pinned here any more. The page offers the menu and
+  # preselects DeepSeek V4.1 Flash with thinking off, the leftmost option. Measured
+  # from *this* region with `--bench-llm`, DeepSeek's time to first token is
+  # 915 ms p50 against Haiku's 435 ms — a gap of 2.1x — because DeepSeek is
+  # served from China and iad is the wrong side of the planet for it. A visitor
+  # can pick Haiku per conversation, which is the point of the menu.
+
+  # Recorded, and the page says so before anybody speaks (`noteRecording`).
+  VOICE_AGENT_SESSIONS = "/data/sessions"
+  # Always on: the trace is how a live failure is explained (whole prompts,
+  # replies and the model's reasoning). On the volume beside the records, which
+  # hold the same words; `--purge-sessions` deletes both (AGENTS.md §10).
+  VOICE_AGENT_TRACE = "/data/traces"
+  # The log, as rotating files on the volume (~55 MB at most): Fly's own buffer
+  # is ~100 lines and is lost on deploy. `scripts/pull-fly.sh` downloads it.
+  VOICE_AGENT_LOGS = "/data/logs"
+
+  # The caps. Off everywhere else; see `limits.py` for what each one bounds.
+  VOICE_AGENT_MAX_LIVE = "4"
+  # 30 minutes, raised from 6. A conversation is charged for every turn of its
+  # whole history, so the ceiling on one session is also the ceiling on one
+  # address's spend — and `deepseek-max` reasons for thousands of tokens a turn.
+  VOICE_AGENT_SESSION_BUDGET = "1800"
+  VOICE_AGENT_MINTS_PER_IP = "10"
+  VOICE_AGENT_MAX_STORED = "1024"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  # The work here is waiting on three vendors' sockets and copying PCM between
+  # them, not computing. Raise it if the trace says otherwise rather than first.

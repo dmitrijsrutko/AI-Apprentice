@@ -1,0 +1,365 @@
+"""One backend per name, shared — because the connection is the asset.
+
+`llm/http.py` keeps an idle HTTP connection for 300 s on the adapter's own
+client, which is what the "connections kept between turns" chapter bought after
+finding every streamed call reopening one. A pool that handed each conversation
+its own adapter would undo that silently, and nothing downstream would notice.
+"""
+
+import pytest
+
+from tests.conftest import FakeLLM, FakeSTT, FakeTTS
+from voice_agent import roles as roles_module
+from voice_agent.backends import Backends
+from voice_agent.conversation import Conversation
+from voice_agent.errors import ConfigError
+from voice_agent.llm.registry import CHOICES, DEFAULT_CHOICE
+from voice_agent.llm.registry import available as llm_available
+from voice_agent.llm.registry import offered as menu_offered
+from voice_agent.stt.registry import EARS, NO_EARS, describe
+from voice_agent.stt.registry import available as stt_available
+from voice_agent.tts import registry as tts_registry
+from voice_agent.tts.elevenlabs_dialogue_tts import ElevenLabsDialogueTTS
+from voice_agent.tts.elevenlabs_tts import ElevenLabsTTS
+
+
+def offered(engine: FakeLLM | None = None, ears: FakeSTT | None = None) -> Backends:
+    return Backends("assemblyai", engine=engine, ears=ears)
+
+
+def test_an_engine_is_built_once_and_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The point of the whole module: the second conversation on a model
+    must get the first one's warm connection, not a cold adapter."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    pool = offered()
+
+    assert pool.engine("deepseek-low") is pool.engine("deepseek-low")
+
+
+def test_different_models_are_different_instances(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    pool = offered()
+
+    assert pool.engine("deepseek-low") is not pool.engine("haiku-4-5")
+
+
+def test_one_model_at_two_efforts_is_two_instances(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Effort is per conversation now, and the pool keys on the option rather
+    than on the model, so the same model at two efforts is two adapters with two
+    connections. One shared between `low` and `high` would answer at whichever
+    of the two happened to be built first."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    pool = offered()
+
+    assert pool.engine("deepseek-low") is not pool.engine("deepseek-high")
+    assert pool.engine("deepseek-low").model == pool.engine("deepseek-high").model
+
+
+def test_recognizers_are_shared_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An `STT` holds no session — `stream()` opens one per listening turn — so
+    there is nothing per-conversation to keep apart."""
+    monkeypatch.setenv("ASSEMBLYAI_API_KEY", "sk-test")
+    pool = offered()
+
+    assert pool.ears("assemblyai") is pool.ears("assemblyai")
+
+
+def test_nothing_is_built_until_it_is_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every adapter calls `require_env` in its constructor, so a pool that
+    built eagerly would crash any deployment holding some keys and not others —
+    which is most of them."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    pool = offered()
+
+    assert pool.engine("deepseek-low") is not None  # the one with a key is fine
+    with pytest.raises(ConfigError):
+        pool.engine("haiku-4-5")  # and the one without only fails when asked
+
+
+def test_an_injected_engine_serves_every_name() -> None:
+    """How a test injects one fake and has it answer whichever stack the code
+    under test chooses, so the selection is inert rather than special-cased."""
+    fake = FakeLLM()
+    pool = offered(engine=fake)
+
+    assert pool.engine("haiku-4-5") is pool.engine("deepseek-low")
+    assert pool.engine("whatever-name").provider == fake.provider
+
+
+def test_an_injected_recognizer_serves_every_name() -> None:
+    fake = FakeSTT()
+    pool = offered(ears=fake)
+
+    assert pool.ears("assemblyai") is fake
+    assert pool.ears("elevenlabs") is fake
+
+
+def test_the_deaf_name_builds_nothing() -> None:
+    assert offered().ears(NO_EARS) is None
+
+
+def test_each_option_builds_its_own_provider_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The menu is data, and every entry of it has to survive being built: an
+    Anthropic tier differing only by model, and a DeepSeek tier only by effort.
+    What each option sends as an effort is asserted against the wire in
+    `test_llm_http.py`; here the option is what the pool is keyed on."""
+    for name in ("DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(name, "sk-test")
+    pool = Backends("assemblyai")
+
+    built = {choice.name: pool.engine(choice.name) for choice in CHOICES}
+
+    for choice in CHOICES:
+        assert built[choice.name].provider == choice.provider
+        assert built[choice.name].model == choice.model
+
+    assert built["haiku-4-5"].model == "claude-haiku-4-5"
+    assert built["deepseek-high"].model == "deepseek-flash"
+
+
+def test_the_menu_offers_only_what_holds_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert menu_offered() == (CHOICES[0],), "no key at all still offers the default"
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    assert {c.provider for c in menu_offered()} == {"anthropic"}
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    assert {c.provider for c in menu_offered()} == {"anthropic", "deepseek"}
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    assert {c.provider for c in menu_offered()} == {"anthropic", "deepseek"}, (
+        "OpenAI holds a key and offers no models: the menu is the six, not every engine"
+    )
+
+
+def test_the_default_is_v4_1_flash_with_thinking_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(name, "sk-test")
+
+    pool = Backends("assemblyai")
+
+    assert pool.default_engine == DEFAULT_CHOICE == "deepseek-off"
+    assert pool.menu.index(CHOICES[0]) == 0, "the menu keeps its order"
+
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    assert Backends("assemblyai").default_engine == "haiku-4-5", (
+        "without a DeepSeek key the default is the first model that is offered"
+    )
+
+
+def test_an_option_that_cannot_be_run_is_not_offered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A URL is something anyone can type. An unavailable option falls back to
+    the default rather than refusing, and the `ready` frame says what ran."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    pool = Backends("assemblyai")
+    conversation = Conversation(id="t")
+
+    chosen, _, _, _ = pool.choose(conversation, {"llm": "opus-5-5"})
+
+    assert chosen == "deepseek-off"
+
+    kept, _, _, _ = pool.choose(Conversation(id="u"), {"llm": "deepseek-low"})
+    assert kept == "deepseek-low"
+
+
+# --- what the registries can answer without building anything ---------------
+
+
+def test_availability_follows_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert llm_available() == ()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    assert llm_available() == ("anthropic",)
+
+
+def test_a_key_set_but_empty_counts_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`.env.example` ships every name with nothing after the `=`, so treating
+    "" as configured would offer every provider on a machine that has none."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "   ")
+
+    assert "anthropic" not in llm_available()
+    assert "openai" not in llm_available()
+
+
+def test_ears_can_be_described_without_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The start screen says what each recognizer hears before one is chosen,
+    and a deployment need not hold every key to say it. `describe` reads the
+    modules' own constants; `STT.languages` would need an instance."""
+    for name in ("ASSEMBLYAI_API_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert stt_available() == ()
+    assert len(describe("assemblyai")["languages"]) == 32  # type: ignore[arg-type]
+    assert len(describe("elevenlabs")["languages"]) == 100  # type: ignore[arg-type]
+
+
+def test_each_pair_of_ears_is_described_by_its_model() -> None:
+    """Chapter 32: a vendor's name is not a model. Both what the option is
+    called and which model id it will run come from the same description the
+    page draws — so the badge and the socket cannot disagree."""
+    heard = describe("assemblyai")
+    scribe = describe("elevenlabs")
+
+    assert heard["title"] == "Universal-3.6 Pro Realtime"
+    assert heard["model"] == "universal-3-6-pro"
+    assert heard["provider"] == "assemblyai"
+    assert scribe["title"] == "Scribe v2 Realtime"
+    assert scribe["model"] == "scribe_v2_realtime"
+    assert all(isinstance(o["hint"], str) and o["hint"] for o in (heard, scribe))
+
+
+def test_the_recognizers_differ_in_the_way_chapter_12_cared_about() -> None:
+    """The fact worth showing at the moment of choosing: Scribe's hundred reach
+    past AssemblyAI's thirty-two — Thai is the new example, since Russian is now
+    in both — and a language it lacks becomes confident nonsense rather than an
+    error."""
+    assert "th" not in EARS["assemblyai"].languages
+    assert "tha" in EARS["elevenlabs"].languages
+
+
+def test_the_recognizer_is_shared_but_the_language_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bug that made a freshly opened conversation decode its first sentence
+    in a language nobody in the room was speaking: `ears` builds one recognizer
+    per backend and keeps it for the process, so a language *on the adapter* was
+    every conversation's. The instance is still shared on purpose (a
+    connection is the asset); the memory is per conversation, so two of them
+    cannot meet."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test")
+    pool = Backends("elevenlabs")
+
+    listener = pool.ears("elevenlabs")
+    assert listener is pool.ears("elevenlabs")  # shared, as designed
+    assert not hasattr(listener, "language"), "the adapter holds no language to leak"
+
+    first, second = Conversation(id="first"), Conversation(id="second")
+    first.language.record("rus", None)
+
+    assert first.language.hint() is not None
+    assert second.language.hint() is None
+
+
+DEVIL = roles_module.load("devils_advocate")
+
+
+def test_a_conversation_picks_its_role_and_keeps_it() -> None:
+    backends = Backends("assemblyai", roles=(DEVIL,))
+    conversation = Conversation(id="t")
+
+    _, _, first, _ = backends.choose(conversation, {"role": "devils_advocate"})
+    _, _, again, _ = backends.choose(conversation, {"role": "none"})
+
+    assert first == again == "devils_advocate"
+
+
+def test_an_unknown_role_is_the_default_not_an_error() -> None:
+    backends = Backends("assemblyai", roles=(DEVIL,), default_role="devils_advocate")
+
+    _, _, role, _ = backends.choose(Conversation(id="t"), {"role": "nobody"})
+
+    assert role == "devils_advocate"
+
+
+def test_a_preselected_role_that_is_not_a_card_is_the_first_card() -> None:
+    assert Backends("assemblyai", roles=(DEVIL,), default_role="nobody").default_role == DEVIL.slug
+    assert Backends("assemblyai", default_role="nobody").default_role == "none", (
+        "with no cards at all there is nothing else to run"
+    )
+
+
+def test_only_cards_are_offered_as_roles() -> None:
+    pool = Backends("assemblyai", roles=(DEVIL,), default_role="devils_advocate")
+    offered = pool.choices("haiku-4-5", "assemblyai", "devils_advocate")["role"]
+    alone = Backends("assemblyai").choices("haiku-4-5", "assemblyai")["role"]
+
+    assert [(o["name"], o["default"]) for o in offered] == [("devils_advocate", True)]
+    assert offered[0]["title"] == DEVIL.name
+    assert alone == []
+
+
+def voiced() -> Backends:
+    return Backends("assemblyai", voice_provider="elevenlabs")
+
+
+def test_the_voice_menu_offers_v4_turbo_by_default_and_flash_as_legacy() -> None:
+    pool = voiced()
+    tts = pool.choices("x", "none", voice=pool.default_voice)["tts"]
+
+    assert [o["model"] for o in tts] == ["eleven_v4_turbo", "eleven_flash_v2_5"]
+    assert [o["name"] for o in tts if o["default"]] == ["v4-turbo"]
+    assert [o["hint"] for o in tts] == ["most emotive, realtime", "legacy, fastest"]
+
+
+def test_the_menu_no_longer_offers_multilingual_v2() -> None:
+    """Dropped from the configuration, not deprecated by its vendor — so it must
+    leave the menu without entering `DEPRECATED`."""
+    assert "multilingual-v2" not in tts_registry.BY_NAME
+    assert "eleven_multilingual_v2" not in {option.model for option in tts_registry.MENU}
+    assert "eleven_multilingual_v2" not in tts_registry.DEPRECATED
+
+
+def test_two_models_on_two_endpoints_get_two_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Text to Speech socket carries no v4 model, so the model id cannot say
+    which endpoint to use — only the option's own builder can, and a wrong
+    pairing would be a runtime refusal, not a startup error."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test")
+    pool = voiced()
+
+    turbo, flash = pool.speaker("v4-turbo"), pool.speaker("flash-v2.5")
+
+    assert isinstance(turbo, ElevenLabsDialogueTTS)
+    assert isinstance(flash, ElevenLabsTTS)
+    assert "text-to-dialogue/stream-input" in turbo.url
+    assert "text-to-speech" in flash.url
+
+
+def test_a_voice_model_is_picked_pinned_and_unknown_names_fall_back() -> None:
+    pool = voiced()
+    conversation = Conversation(id="v")
+
+    *_, first = pool.choose(conversation, {"tts": "flash-v2.5"})
+    *_, again = pool.choose(conversation, {"tts": "v4-turbo"})
+    *_, unknown = pool.choose(Conversation(id="w"), {"tts": "multilingual-v2"})
+
+    assert (first, again) == ("flash-v2.5", "flash-v2.5"), "a reconnect keeps its voice"
+    assert unknown == "v4-turbo", "a voice the menu has dropped falls back to the default"
+
+
+def test_silent_offers_no_voice_and_builds_none() -> None:
+    pool = Backends("assemblyai")
+
+    *_, voice = pool.choose(Conversation(id="s"), {"tts": "v4-turbo"})
+
+    assert pool.choices("x", "none")["tts"] == []
+    assert voice == "none" and pool.speaker(voice) is None
+
+
+def test_a_voice_is_built_once_per_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test")
+    pool = voiced()
+
+    turbo, flash = pool.speaker("v4-turbo"), pool.speaker("flash-v2.5")
+
+    assert turbo is pool.speaker("v4-turbo")
+    assert turbo is not None and flash is not None
+    assert (turbo.model, flash.model) == ("eleven_v4_turbo", "eleven_flash_v2_5")
+
+
+def test_an_injected_speaker_serves_every_voice_name() -> None:
+    fake = FakeTTS()
+    pool = Backends("assemblyai", speaker=fake)
+
+    assert pool.speaker("v4-turbo") is fake and pool.speaker("flash-v2.5") is fake
