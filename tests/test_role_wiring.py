@@ -185,13 +185,15 @@ def test_a_reconnect_keeps_the_role_it_started_with() -> None:
 
 
 def test_the_start_screen_offers_only_cards_and_preselected_as_asked() -> None:
-    with app_with(FakeLLM(), preselected="devils_advocate") as client:
+    with app_with(FakeLLM(), preselected="thinking_partner") as client:
         page = client.get(f"/c/{mint(client)}").text
 
     served = json.loads(page.split('id="facts" type="application/json">')[1].split("</script>")[0])
     offered = served["choices"]["role"]
-    assert [o["name"] for o in offered] == ["ai_apprentice", "devils_advocate", "thinking_partner"]
-    assert [o["name"] for o in offered if o["default"]] == ["devils_advocate"]
+    assert [o["name"] for o in offered] == ["ai_apprentice", "thinking_partner"], (
+        "the devil's advocate is kept but not offered"
+    )
+    assert [o["name"] for o in offered if o["default"]] == ["thinking_partner"]
 
 
 def test_a_broken_role_stops_the_server_at_startup() -> None:

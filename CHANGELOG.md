@@ -15,6 +15,110 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 4 — The Work Map: capture becomes a map you can click, hear and correct
+
+Module 2 of the brief. The apprentice's page now runs a flow, **① Capture ▸
+② Map ▸ ③ Teach**, with one button above the input. **Finish capture** draws
+the Work Map from the whole conversation. A progress bar runs for about 30 s,
+as for the judge, then the apprentice explains the process back aloud. The map
+appears as numbered steps, each with its screenshot, the decision, the reason
+in the expert's own words and its guardrails. Clicking a step opens it, and the
+apprentice says that step. The conversation carries on: it asks the open
+questions one at a time, and every correction redraws the map a few seconds
+later. **Finish map** makes it final for teaching, which is the next chapter.
+
+**What changed**
+- `workmap.py` (new) and `prompts/workmap.md`:
+  - the conversation becomes a script of numbered messages (`m1…`) and screen
+    moments (`g1…`);
+  - the map creator returns steps, gaps and a teach-back;
+  - code checks every screen id and marks every quote not found word for word
+    in the message it cites;
+  - `Mapper` draws, redraws 6 s after the last correction (one at a time), and
+    builds the line a clicked step is spoken with.
+- `eyes.py`: the screenshot behind every reading that saw a change is kept
+  beside the session record (`sessions/<id>/g<n>.jpg`, at most 200). It is
+  served at `/c/<key>/frames/g<n>.jpg` and deleted by `--purge-sessions`.
+  Frames stop once capture ends.
+- `conversation.py`: the phase (`capture`, `mapping`, `map`, `mapped`), the
+  map, and a `[work map …]` note in the context, so replies can discuss it.
+- `session.py`: an `Announce` event says a fixed line through the ordinary
+  turn path. User turns are reported to the mapper.
+- Roles: a card flag, `mapped = true`, set on the apprentice. The start screen
+  shows **Map creator** (DeepSeek V4.1 Flash high, or Claude Opus 5.5) for it,
+  and **Judge** stays with the devil's advocate.
+- The page: the flow bar, the map wait, the map card (`web/workmap.js`) and
+  step clicks. The start screen says screenshots of a shared screen are kept.
+
+**Design decisions**
+- **Quotes are checked in code, not trusted.** The brief's bar is "every step
+  and guardrail links to a screen moment and the expert's own words". The
+  model is told never to invent a reason, and code marks the ones it did
+  anyway (dotted on the page).
+- **A clicked step is spoken from a template, not generated.** It is instant,
+  and it says exactly what the map says.
+- **Redraw on corrections, debounced.** The user chose automatic over a
+  button. Six seconds after the last turn, one drawing at a time, so a
+  two-sentence correction is one call, not two.
+- **Screenshots only behind changes, capped.** These are the moments the map
+  links to. Keeping every frame would fill the 1 GB volume in about ten
+  sessions.
+
+**Latency impact** — none on the voice path: drawing runs beside the
+conversation. Measured on the recorded Skyscanner session (29 messages, 17
+screen moments):
+- **DeepSeek V4.1 Flash high: 30.3 s.** 8 steps; 3 reasons, all verified; a
+  24 h limit; 5 gaps.
+- **Claude Opus 5.5: 23.2 s.** 6 steps; 2 reasons, both verified; a limit and
+  a "never"; 5 gaps.
+
+**Deliberately not done** — Teach (Module 3, next); replaying a step's audio;
+editing the map by hand; agent-ready export; redaction before the model.
+
+**Verification** — `uv run verify` (954 passed, plus node). Real builds as
+above. The whole flow runs over the socket with fakes: share, a frame and its
+screenshot, Finish capture, mapping, the map, a clicked step spoken, and the
+screenshot served. The page's flow bar and map card are not yet exercised in
+a real browser.
+
+**Fixes**
+- A correction made while a map was being drawn was dropped. The redraw it
+  asked for was attempted from inside the drawing, which saw itself still
+  running. It now follows once that drawing has finished. What is said while
+  the first map is drawn counts as a correction too.
+- A connection lost mid-drawing left the flow stuck at "Drawing the map…".
+  The phase returns to capture, so the button is offered again.
+- The silence ladder is paused while the map is drawn ("give me half a
+  minute" is not a silence to fill).
+- **Finish capture** cuts off whatever the apprentice is saying. Live, it kept
+  talking over its own "drawing the map".
+- **The eyes misread dates, and the apprentice believed them over the user.**
+  Live, "Fri, 16 Oct" (spoken by the user too) was read as 18 for minutes,
+  then 10, and the apprentice said three times "your search is showing the
+  eighteenth". The stored frames show 16, about 7 px tall once a whole window
+  is shrunk to 1024 px. Re-read on those frames (g77/g89, fresh and after a
+  wrong reading), Haiku 4.5 read 18 or 10 in 7 of 8 tries across two runs;
+  Sonnet 5.5 read 16 in 8 of 8, at 2.7–3.3 s, no slower. Haiku also copied a
+  wrong value forward from the previous description. Now: Sonnet 5.5 is the
+  default eyes (Haiku stays a choice); the vision prompt reads every value
+  from the image and never from the previous description; and the system
+  prompt says the eyes can misread small text, so the user's words win, and a
+  disagreement is asked about once, never asserted. Cost at the 900-reading
+  cap: about $6 on Sonnet (measured 1,800 tokens in, ~300 out a reading),
+  against about $2 on Haiku.
+- Sonnet's thinking counts against a reading's output ceiling. Measured at
+  297-318 tokens, it would have been cut off at Haiku's 400 on a busier screen.
+  Each eyes option now has its own ceiling (1,200 for Sonnet), and a reading
+  cut off mid-JSON is reported as failed instead of kept half-read.
+- The start screen offers the AI apprentice and the thinking partner. The
+  devil's advocate is kept, judge and all, but not listed (`offered = false` on
+  its card); a URL or `VOICE_AGENT_ROLE` still picks it.
+- On a reload the map is drawn after the conversation, not above it.
+- A clicked step says only the first sentence of its decision, and decisions
+  are asked for as instructions of 15 words at most, never "he" or "she".
+- Fixed lines (the wait, the teach-back, a clicked step) are labelled as such
+  under stats, not as model replies.
+
 ## Chapter 3 — Live eyes: the screen as it is when you ask
 
 Two live sessions on Skyscanner felt "not truly interactive", and the record

@@ -44,7 +44,7 @@ from voice_agent.channel import Channel, page_event
 from voice_agent.config import DEFAULT_GREETING, Settings, build_prompt, load_settings
 from voice_agent.conversation import Conversation, Message
 from voice_agent.errors import ConfigError, SessionNotFoundError, VoiceAgentError
-from voice_agent.events import Playback, Typed
+from voice_agent.events import Announce, Playback, Typed
 from voice_agent.eyes import Eyes
 from voice_agent.greeting import greet
 from voice_agent.initiative import LADDER, Rung
@@ -62,6 +62,7 @@ from voice_agent.timeline import Timeline
 from voice_agent.tts import TTS
 from voice_agent.tts.base import SAMPLE_RATE
 from voice_agent.tts.registry import NO_VOICE
+from voice_agent.workmap import Mapper
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,15 @@ def serialize(messages: Sequence[Message]) -> list[dict[str, str]]:
 FACTS_BLOCK = '<script id="facts" type="application/json">{}</script>'
 """Where `chat_page` writes what this agent is, for the page to read before it
 has a socket. Empty by default, so a page served any other way claims nothing."""
+
+
+FRAME_NAME = re.compile(r"^g\d{1,4}$")
+
+
+def frames_dir(directory: Path | None, conversation: Conversation) -> Path | None:
+    """Where a conversation's screenshots are kept, beside its record: only
+    when conversations are written down at all."""
+    return directory / conversation.id if directory is not None else None
 
 
 def named_judge(name: str | None) -> dict[str, str] | None:
@@ -450,6 +460,20 @@ def create_app(
             }
         return HTMLResponse(with_facts(PAGE_PATH.read_text(encoding="utf-8"), known))
 
+    @app.get("/c/{key}/frames/{name}.jpg")
+    async def frame(key: str, name: str) -> Response:
+        """A screenshot behind the Work Map. The conversation's key is the
+        secret, as for its page; the name is checked before it nears a path."""
+        try:
+            conversation = agent.sessions.get(key)
+        except SessionNotFoundError:
+            return Response(status_code=404)
+        folder = frames_dir(agent.record_dir, conversation)
+        path = folder / f"{name}.jpg" if folder is not None and FRAME_NAME.match(name) else None
+        if path is None or not path.is_file():
+            return Response(status_code=404)
+        return Response(path.read_bytes(), media_type="image/jpeg")
+
     @app.get("/c/{key}/verdict")
     async def verdict(key: str) -> Response:
         """The ruling on an ended round: 200 with it, 202 while the judge is
@@ -568,12 +592,35 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             channel.send_json,
             session.noticed,
             max_frames=agent.settings.eyes_max_frames,
+            frames_dir=frames_dir(agent.record_dir, conversation),
         )
         if eyes_name is not None
         else None
     )
     if eyes is not None:
         session.looking = eyes.request
+    mapper_name = (
+        agent.backends.mapper_for(conversation, websocket.query_params)
+        if role is not None and role.mapped
+        else None
+    )
+    mapper: Mapper | None = None
+    if mapper_name is not None:
+
+        async def announce(line: str, interrupt: bool = False) -> None:
+            session.post(Announce(line, interrupt))
+
+        chosen = mapper_name
+        mapper = Mapper(
+            conversation,
+            creator=lambda: agent.backends.judge(chosen),
+            title=judge.BY_NAME[chosen].title,
+            report=channel.send_json,
+            announce=announce,
+            written=recording.work_map if recording is not None else lambda _: None,
+            guard=agent.rulings,
+        )
+        session.turned = mapper.corrected
     budget_seconds = round_budget(agent.settings.session_budget, role)
     left = time_left(budget_seconds, conversation)
     await channel.send_json(
@@ -591,6 +638,12 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             "budget_seconds": left,
             # Named when this round will be judged: the page waits for a ruling.
             "judge": named_judge(judge_name),
+            # The apprentice's flow, where it stands, and the map if there is one.
+            "mapped": mapper is not None,
+            "mapper": named_judge(mapper_name),
+            "phase": conversation.phase,
+            "work_map": conversation.work_map,
+            "map_version": conversation.map_version,
             "history": serialize(conversation.messages),
             "frames": list(conversation.frames),
             "ended": conversation.ended,
@@ -636,7 +689,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
                 if session.mic is not None:
                     session.mic.feed(frame)
             elif (raw := message.get("text")) is not None:
-                await handle_text(channel, session, raw, recording, eyes)
+                await handle_text(channel, session, raw, recording, eyes, mapper)
     except WebSocketDisconnect as exc:
         why = f"page disconnected (code {exc.code})"
         return
@@ -651,6 +704,8 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             with contextlib.suppress(asyncio.CancelledError):
                 await budget
         closing = timing.now()
+        if mapper is not None:
+            await mapper.close()
         if eyes is not None:
             await eyes.close()
             # Sharing ends with the socket: a reload starts unshared, and the
@@ -716,6 +771,7 @@ async def handle_text(
     raw: str,
     record: Record | None = None,
     eyes: Eyes | None = None,
+    mapper: Mapper | None = None,
 ) -> None:
     try:
         payload = json.loads(raw)
@@ -756,6 +812,26 @@ async def handle_text(
                 CLIENT_WORD.sub("", str(payload.get("surface", "")))[:20],
                 CLIENT_WORD.sub("", str(payload.get("label", ""))),
             )
+        return
+
+    if kind == "phase":
+        # The flow bar: capture is finished (draw the map), or the map is.
+        if mapper is not None:
+            to = payload.get("to")
+            if to == "map":
+                await mapper.begin()
+            elif to == "done":
+                # Not awaited here: a final redraw may take half a minute, and
+                # the socket must keep reading meanwhile.
+                session.finishing = asyncio.create_task(mapper.finish())
+        return
+
+    if kind == "map_step":
+        n = payload.get("n")
+        clicked = isinstance(n, int) and not isinstance(n, bool)
+        line = mapper.step(n) if mapper is not None and clicked else None
+        if line is not None:
+            session.post(Announce(line, interrupt=True))
         return
 
     if kind == "frame":

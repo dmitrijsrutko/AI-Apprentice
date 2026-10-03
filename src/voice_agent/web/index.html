@@ -71,6 +71,44 @@
     border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap;
   }
   .chip.sharing { background: #2e7d4f; color: #fff; border-color: #2e7d4f; }
+  /* The apprentice's flow: capture, then the map, then teaching. */
+  #flow { max-width: 700px; margin: 0 auto 8px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  #flow .f-step { color: var(--muted); }
+  #flow .f-step.now { color: var(--fg); font-weight: 600; }
+  #flow .f-step.done { color: #2e7d4f; }
+  #flow .f-sep { color: var(--muted); opacity: .5; }
+  #flow .f-gap { margin-left: auto; }
+  #flow a { color: var(--fg); }
+  #flow button { padding: 6px 12px; font-size: 12.5px; }
+  /* The Work Map. */
+  .workmap, .mapwait { align-self: stretch; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .workmap header { font-size: 15px; margin-bottom: 4px; }
+  .m-summary { color: var(--muted); margin: 0 0 8px; font-size: 13.5px; }
+  .m-steps { list-style: none; margin: 0; padding: 0; }
+  .m-step { position: relative; margin: 0 0 14px; }
+  .m-step:not(:last-child)::after { content: "↓"; position: absolute; left: 11px; bottom: -14px; color: var(--muted); font-size: 12px; }
+  .m-step summary { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; list-style: none; padding: 6px; border-radius: 8px; }
+  .m-step summary::-webkit-details-marker { display: none; }
+  .m-step summary:hover, .m-step details[open] summary { background: var(--agent); }
+  .m-n { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--fg); color: var(--bg); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .m-head { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .m-decision { font-size: 13px; color: var(--muted); }
+  .m-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+  .m-chip { font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+  .m-judgment { border-color: #b8860b; }
+  .m-gap { color: #c0392b; }
+  .m-thumb { flex: none; width: 96px; height: 54px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+  .m-body { padding: 6px 6px 4px 40px; font-size: 13.5px; }
+  .m-shot img { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); }
+  .m-body p { margin: 6px 0; }
+  .m-rails { margin: 4px 0; padding-left: 16px; }
+  .m-kind { font-size: 11.5px; font-weight: 600; }
+  q.unverified { text-decoration: underline dotted; }
+  .m-gaps { margin-top: 6px; font-size: 13px; }
+  .m-gaps ul { margin: 4px 0; padding-left: 18px; }
+  .workmap footer, .m-progress { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .m-wait { margin: 0; }
+  .workmap.updating { opacity: .6; }
   /* Who holds the floor, by the server's VAD: the last 12 s, newest on the right. */
   #floor { position: relative; height: 14px; border-bottom: 1px solid var(--line); overflow: hidden; }
   #floor span {
@@ -207,6 +245,13 @@
   </div></div>
 
   <form id="form">
+    <div id="flow" hidden>
+      <span class="f-step" data-phase="capture">① Capture</span><span class="f-sep">▸</span>
+      <span class="f-step" data-phase="map">② Map</span><span class="f-sep">▸</span>
+      <span class="f-step" data-phase="teach">③ Teach</span>
+      <a id="tomap" href="#workmap" hidden>🗺 map</a>
+      <button type="button" id="flowNext" class="f-gap">Finish capture ▶</button>
+    </div>
     <div class="row">
       <input id="input" autocomplete="off" placeholder="Ask something…" autofocus>
       <button id="send" type="submit">Send</button>

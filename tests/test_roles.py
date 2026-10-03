@@ -144,3 +144,11 @@ def test_a_bad_round_is_refused(tmp_path: Path, line: str, complaint: str) -> No
     write(tmp_path, "coach", CARD.replace(patient, f"{patient}\n{line}"))
     with pytest.raises(ConfigError, match=complaint):
         roles.load("coach", tmp_path)
+
+
+def test_a_card_can_be_kept_but_not_offered(tmp_path: Path) -> None:
+    assert roles.load("devils_advocate").offered is False
+    assert roles.load("ai_apprentice").offered is True
+    write(tmp_path, "shy", CARD.replace("+++\n\n", 'offered = "no"\n+++\n\n', 1))
+    with pytest.raises(ConfigError, match="offered"):
+        roles.load("shy", tmp_path)

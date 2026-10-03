@@ -78,7 +78,9 @@ class Settings:
     character on a 1080p screen. A blinking caret is ignored another way."""
     eyes_max_frames: int | None = 900
     """How many frames one conversation may have read: with two in flight,
-    about 25 minutes of a screen that never stops changing, ~$1.80 on Haiku.
+    about 25 minutes of a screen that never stops changing. Measured per
+    reading: Sonnet 5.5 ~1,800 in and ~300 out (its thinking counts), so ~$6 at
+    the cap; Haiku 4.5 ~1,550 in and ~100-250 out, so ~$2.
     A spend cap for the public instance; `off` for none."""
 
 

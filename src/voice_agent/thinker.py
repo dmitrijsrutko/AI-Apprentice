@@ -137,7 +137,7 @@ def transcript(conversation: Conversation) -> str:
     if conversation.eyes is not None:
         # What the partner saw on the shared screen lately, and whether it can see.
         lines += [seen_note(glimpse) for glimpse in conversation.seen[-SCREEN_LINES:]]
-        lines.append(eyes_status(conversation.screen))
+        lines.append(eyes_status(conversation.screen, conversation.phase))
     return "\n".join(lines) if lines else "(nothing yet)"
 
 

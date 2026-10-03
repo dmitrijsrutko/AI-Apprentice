@@ -35,7 +35,7 @@ function picked(group) {
 // The chosen role, engine, ears, voice model and judge as a query string.
 export function stackQuery() {
   const stack = new URLSearchParams();
-  for (const group of ["role", "llm", "stt", "tts", "eyes", "judge"]) {
+  for (const group of ["role", "llm", "stt", "tts", "eyes", "judge", "mapper"]) {
     const value = picked(group);
     if (value) stack.set(group, value);
   }
@@ -121,22 +121,27 @@ export function showStart(known) {
     (o) => `${escape(vendor(o))} ${escape(o.title)} <small>${escape(o.hint)}</small>`,
     { asServed: true });
 
-  // Shown only while a judged role is picked (or is the only one there is).
+  // Shown only while a judged role is picked (or is the only one there is);
+  // the apprentice's map creator likewise, from the same two models.
   const judges = choose("judge", "Judge", known.choices?.judge ?? [],
     (o) => `${escape(o.title)} <small>${escape(o.hint ?? "")}</small>`);
-  if (judges) {
-    const role = () => picked("role") || roles.find((o) => o.default)?.name;
-    const judged = () => roles.find((o) => o.name === role())?.judged ?? false;
-    const paint = () => { judges.hidden = !judged(); };
-    startStack.addEventListener("change", paint);
-    paint();
-  }
+  const mappers = choose("mapper", "Map creator", known.choices?.mapper ?? [],
+    (o) => `${escape(o.title)} <small>${escape(o.hint ?? "")}</small>`);
+  const role = () => picked("role") || roles.find((o) => o.default)?.name;
+  const card = () => roles.find((o) => o.name === role()) ?? {};
+  const paint = () => {
+    if (judges) judges.hidden = !card().judged;
+    if (mappers) mappers.hidden = !card().mapped;
+  };
+  startStack.addEventListener("change", paint);
+  paint();
 
   if (!known.ears) notice("This agent has <strong>no microphone</strong> — typing only.");
   if (!known.voice) notice("This agent is <strong>silent</strong> — it will not speak.");
   if (known.recording) {
     notice(
       "This conversation is <strong>written down on the server</strong> — what is said, " +
-      "what is typed, and how long each part took.<br>No audio is ever stored.");
+      "what is typed, how long each part took, and <strong>screenshots of a screen you " +
+      "share</strong> for the Work Map.<br>No audio is ever stored.");
   }
 }

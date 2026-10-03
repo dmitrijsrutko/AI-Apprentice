@@ -155,6 +155,15 @@ class Backends:
             self._built_visions[name] = create_vision(name)
         return self._built_visions[name]
 
+    def mapper_for(self, conversation: Conversation, asked: Mapping[str, str]) -> str:
+        """Who draws this conversation's Work Map, pinned on first connect. The
+        same models as the judge, offered under their own picker."""
+        if conversation.mapper is None:
+            wanted = asked.get("mapper", "")
+            names = {choice.name for choice in self.judges}
+            conversation.mapper = wanted if wanted in names else self.judges[0].name
+        return conversation.mapper
+
     def judge_for(self, conversation: Conversation, asked: Mapping[str, str]) -> str:
         """The judge this conversation is ruled on by, pinned on first connect."""
         if conversation.judge is None:
@@ -184,9 +193,11 @@ class Backends:
                 "summary": r.summary,
                 "default": r.slug == role,
                 "judged": r.judged,
+                "mapped": r.mapped,
                 "minutes": r.minutes,
             }
             for r in self.roles
+            if r.offered
         ]
         return {
             "eyes": [
@@ -214,6 +225,16 @@ class Backends:
             ],
             "stt": [{**describe(name), "default": name == ears} for name in self.listeners],
             "judge": [
+                {
+                    "name": c.name,
+                    "title": c.title,
+                    "hint": c.hint,
+                    "provider": c.provider,
+                    "default": not n,
+                }
+                for n, c in enumerate(self.judges)
+            ],
+            "mapper": [
                 {
                     "name": c.name,
                     "title": c.title,

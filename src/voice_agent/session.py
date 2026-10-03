@@ -32,6 +32,7 @@ from voice_agent import echo, timing, trace
 from voice_agent.channel import Channel
 from voice_agent.conversation import Conversation
 from voice_agent.events import (
+    Announce,
     End,
     Event,
     Final,
@@ -200,6 +201,11 @@ class Session:
             if role is not None and thinker is not None
             else None
         )
+        self.finishing: asyncio.Task[None] | None = None
+        """The Work Map being made final, held so it is not collected."""
+        self.turned: Callable[[], None] | None = None
+        """Told when the user has said something (a committed turn): the Work
+        Map redraws itself from corrections (`workmap.Mapper.corrected`)."""
         self.looking: Callable[[], Awaitable[None]] | None = None
         """Asks the eyes for the screen as it is now (`Eyes.request`), when
         there are eyes: set by the server, called when the user starts speaking."""
@@ -279,6 +285,11 @@ class Session:
                 await self.submit(text, typed=True)
             case Speak(line, rung):
                 await self.speak(line, rung)
+            case Announce(line, interrupt):
+                if not self.conversation.ended:
+                    if interrupt:
+                        await self.interrupt()
+                    self._begin(Turn(None, line, after=self._settling), None, {"announced": True})
             case HoldOver(hold):
                 await self._release_held(hold)
             case ResumeDue():
@@ -318,6 +329,8 @@ class Session:
         """
         if self.conversation.ended or self._agent_busy():
             return None
+        if self.conversation.phase == "mapping":
+            return None  # the map is being drawn: the apprentice said to give it half a minute
         if self.mic is None or not self.mic.listening or self.mic.held:
             return None
         return self.mic.quiet_for
@@ -627,6 +640,8 @@ class Session:
                 self.mic._stt.language = language  # type: ignore[attr-defined]
         self._submits += 1
         self._initiative.reset()  # the user spoke: the silence budget starts over
+        if self.turned is not None:
+            self.turned()
         if is_exit_command(text):
             await self._speculator.abandon()
             await self.end()

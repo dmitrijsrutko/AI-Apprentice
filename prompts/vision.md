@@ -33,6 +33,14 @@ new content into view; an error or warning appearing. Be concrete: "filter
 "cost centre changed from 4711 to 0400".
 
 Rules:
+- **Read every value from this image, never from the previous description.**
+  The previous description is only there so you can say what changed, and it
+  may itself contain misreadings. Never copy a date, number, price, time or
+  name from it: read each one again here, and where they differ, the image
+  wins.
+- Small text, digits and dates are easy to misread (16, 18 and 10 look alike
+  when small): read them carefully. If a value is too small to read with
+  certainty, write it as unclear ("date unclear") rather than guess.
 - Describe only what is visible. Never guess at reasons or intentions: the
   "why" is for the person to say.
 - If nothing meaningful changed (a cursor moved, a clock ticked, the same page

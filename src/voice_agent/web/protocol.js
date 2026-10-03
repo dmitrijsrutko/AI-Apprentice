@@ -33,3 +33,9 @@ export const share = (active, surface = "", label = "") =>
   JSON.stringify({ type: "share", active, surface, label });
 
 export const screenFrame = (jpeg, changed) => JSON.stringify({ type: "frame", jpeg, changed });
+
+// The apprentice's flow: capture is finished (`map`), or the map is (`done`);
+// and a step of the map clicked, for the apprentice to say.
+export const phase = (to) => JSON.stringify({ type: "phase", to });
+
+export const mapStep = (n) => JSON.stringify({ type: "map_step", n });

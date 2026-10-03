@@ -34,7 +34,7 @@ SPEAKERS = {
 """Frames carrying something the user read or heard. Everything else is a note
 attached to whatever came before it."""
 
-NOISE = frozenset({"delta", "marks", "audio_start", "reply_start", "floor", "look"})
+NOISE = frozenset({"delta", "marks", "audio_start", "reply_start", "floor", "look", "work_map"})
 """One frame per token, per audio chunk, or per change of who is speaking.
 Keeping them would bury the conversation in its own telemetry; the trace holds
 them."""
@@ -410,6 +410,30 @@ class Record:
         )
         if origin:
             self._write(f"{origin}\n")
+        self.flush()
+
+    def work_map(self, drawn: Mapping[str, Any]) -> None:
+        """A Work Map as drawn: its steps with their reasons and guardrails, so
+        the record reads without the page."""
+        work_map = drawn.get("map") or {}
+        lines = [
+            f"**{work_map.get('title', 'Work Map')}** (version {drawn.get('version')}, "
+            f"{round((drawn.get('ms') or 0) / 1000)} s) — {work_map.get('summary', '')}",
+            "",
+        ]
+        for step in work_map.get("steps") or []:
+            reason = step.get("reason") or {}
+            why = f" — “{reason.get('quote')}”" if reason else " — why unknown"
+            where = f" ({step.get('screen')} at {step.get('at')})" if step.get("screen") else ""
+            lines.append(
+                f"{step.get('n')}. {step.get('title')}: {step.get('decision')}{why}{where}"
+            )
+            lines += [
+                f"   - {g.get('kind')}: {g.get('rule')}" for g in step.get("guardrails") or []
+            ]
+        if gaps := work_map.get("gaps"):
+            lines += ["", "Still unclear:", *[f"- {gap}" for gap in gaps]]
+        self.block("work map", "\n".join(lines), "")
         self.flush()
 
     def ruling(self, ruling: Mapping[str, Any]) -> None:

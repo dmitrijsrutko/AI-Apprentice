@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from voice_agent import timing, trace
 from voice_agent.conversation import Conversation, Glimpse
@@ -38,6 +39,10 @@ in flight, then its own); two, staggered, by about one and a half."""
 STAGGER_SECONDS = 1.0
 """A second call starts only this long after the newest one began: two calls
 on the same instant would read the same screen twice."""
+
+MAX_STORED_FRAMES = 200
+"""Screenshots kept per conversation, for the Work Map: the frame behind each
+reading that saw a change. 1024 px JPEGs of 60-120 KB, so about 20 MB at most."""
 
 LOOK_GAP_SECONDS = 3.0
 """At most one "look now" per this long: a turn's speech can start and stop
@@ -60,12 +65,17 @@ class Eyes:
         report: Callable[[dict[str, object]], Awaitable[None]],
         noticed: Callable[[str | None], None] = lambda _: None,
         max_frames: int | None = None,
+        frames_dir: Path | None = None,
     ) -> None:
+        """`frames_dir`: where the screenshots behind what was seen are kept
+        for the Work Map; `None` keeps none (recording is off)."""
         self._vision = vision
         self._conversation = conversation
         self._report = report
         self._noticed = noticed
         self._max_frames = max_frames
+        self._frames_dir = frames_dir
+        self.stored = sum(1 for g in conversation.seen if g.frame)
         self._reads = 0
         """Frames sent to the model, read or still being read: what the cap counts."""
         self._capped = False
@@ -116,8 +126,8 @@ class Eyes:
     def frame(self, jpeg: bytes) -> None:
         """A changed frame from the page. Read now if nothing is being read,
         else it waits — replacing whatever was waiting."""
-        if not self.sharing:
-            return  # sent after the share stopped: nothing to see
+        if not self.sharing or self._conversation.phase != "capture":
+            return  # sent after the share stopped, or after capture: nothing to see
         if self._max_frames is not None and self._reads >= self._max_frames:
             if not self._capped:
                 self._capped = True
@@ -233,9 +243,9 @@ class Eyes:
             self.stale += 1
             return  # a newer frame's reading came back first
         self._applied = taken
-        await self.saw(seen)
+        await self.saw(seen, jpeg)
 
-    async def saw(self, seen: Seen) -> None:
+    async def saw(self, seen: Seen, jpeg: bytes | None = None) -> None:
         """Keep what a frame showed, and tell the page and the session."""
         conversation = self._conversation
         conversation.screen.now = seen.screen
@@ -256,12 +266,19 @@ class Eyes:
             input_tokens=seen.input_tokens,
             output_tokens=seen.output_tokens,
         )
+        glimpse: Glimpse | None = None
         if seen.events:
             last = conversation.messages[-1] if conversation.messages else None
-            conversation.seen.append(Glimpse(last, when, seen.app, seen.events))
+            glimpse = Glimpse(
+                last, when, seen.app, seen.events, id=f"g{len(conversation.seen) + 1}"
+            )
+            glimpse.frame = self._keep(glimpse.id, jpeg)
+            conversation.seen.append(glimpse)
         await self._report(
             {
                 "type": "seen",
+                "id": glimpse.id if glimpse is not None else "",
+                "frame": bool(glimpse and glimpse.frame),
                 "at": when,
                 "app": seen.app,
                 "events": list(seen.events),
@@ -275,6 +292,19 @@ class Eyes:
         )
         if seen.events:
             self._noticed("; ".join(seen.events))
+
+    def _keep(self, gid: str, jpeg: bytes | None) -> bool:
+        """Store the screenshot behind a glimpse, for the map. Whether it was."""
+        if self._frames_dir is None or jpeg is None or self.stored >= MAX_STORED_FRAMES:
+            return False
+        try:
+            self._frames_dir.mkdir(parents=True, exist_ok=True)
+            (self._frames_dir / f"{gid}.jpg").write_bytes(jpeg)
+        except OSError as exc:
+            logger.warning("could not keep a screenshot: %s", exc)
+            return False
+        self.stored += 1
+        return True
 
     async def close(self) -> None:
         self._waiting = None

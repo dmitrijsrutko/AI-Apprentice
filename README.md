@@ -25,8 +25,9 @@ previous one. [CHANGELOG.md](CHANGELOG.md) has the reasoning.
 
 - **0 — The empty page, again.** A new project with a fresh history, standing on an inherited voice pipeline. The brief is added as context, and the working contract ([AGENTS.md](AGENTS.md)) is kept.
 - **1 — The apprentice, by ear.** A new default role, **AI apprentice**: the expert talks it through a task; it asks why, finds the limits and exceptions, and explains the process back until they confirm. There are no eyes yet. The default model is DeepSeek V4.1 Flash, smartest.
-- **2 — Eyes.** Share a screen, window or tab at any time (🖥 share). Changed frames are read by Claude (Haiku 4.5 or Sonnet 5.5, about 2.5 s each, one at a time, the newest waiting), and what it sees joins the conversation. The apprentice knows whether it can see, may ask about what you just did at a short pause, and the **eyes** toggle shows every reading. Frames are never stored.
+- **2 — Eyes.** Share a screen, window or tab at any time (🖥 share). Changed frames are read by Claude (Sonnet 5.5 by default, which reads small dates and digits; Haiku 4.5 as the cheaper choice; about 2.5–3.5 s each), and what it sees joins the conversation. The apprentice knows whether it can see, may ask about what you just did at a short pause, and the **eyes** toggle shows every reading. Frames are never stored.
 - **3 — Live eyes.** The screen is read the moment you start speaking, readings take 1.1–2.4 s (shorter output, 1024 px frames), two run overlapped with the newest result winning, replies stay around 25 words, and an unprompted line about a screen that has since changed is dropped and reconsidered.
+- **4 — The Work Map.** A flow bar, Capture ▸ Map ▸ Teach. **Finish capture** draws the map from the conversation (~25–30 s, DeepSeek or Claude Opus as "Map creator"). Its steps link to stored screenshots and quote the expert word for word, with code marking any quote it cannot find. The apprentice explains the map back, says any step you click, asks the open questions, and redraws the map from your corrections.
 
 ### The inherited foundation
 
@@ -77,6 +78,9 @@ src/voice_agent/          the inherited pipeline: server, session, turn-taking,
   llm/vision.py           Claude reads a frame: what is on screen, what changed
   web/eyes.js             the screen picker and which frames are worth sending
 prompts/vision.md, eyes_nudge.md  what the eyes report; when what they saw is worth a word
+  workmap.py              the Work Map: drawn from the conversation, checked, redrawn, spoken
+  web/workmap.js          the map card and its wait
+prompts/workmap.md        what the map creator is asked for
 tests/                    pytest; tests/web/ node tests; tests/tapes/ replayed conversations
 scripts/                  operational helpers
 ```

@@ -281,12 +281,15 @@ def test_a_preselected_role_that_is_not_a_card_is_the_first_card() -> None:
 
 
 def test_only_cards_are_offered_as_roles() -> None:
-    pool = Backends("assemblyai", roles=(DEVIL,), default_role="devils_advocate")
-    offered = pool.choices("haiku-4-5", "assemblyai", "devils_advocate")["role"]
+    partner = roles_module.load("thinking_partner")
+    pool = Backends("assemblyai", roles=(DEVIL, partner), default_role="thinking_partner")
+    offered = pool.choices("haiku-4-5", "assemblyai", "thinking_partner")["role"]
     alone = Backends("assemblyai").choices("haiku-4-5", "assemblyai")["role"]
 
-    assert [(o["name"], o["default"]) for o in offered] == [("devils_advocate", True)]
-    assert offered[0]["title"] == DEVIL.name
+    assert [(o["name"], o["default"]) for o in offered] == [("thinking_partner", True)], (
+        "a card with offered = false is kept but not listed"
+    )
+    assert offered[0]["title"] == partner.name
     assert alone == []
 
 

@@ -14,6 +14,7 @@ import {
 export function endLines(msg, cut) {
   if (msg.interrupted) return cut ? [] : ["✋ interrupted before it was spoken"];
   if (msg.initiative != null) return [unpromptedLine(msg)];
+  if (msg.announced) return ["📣 said by the map flow — not a model reply"];
   if (msg.resumed) return ["↩ picked up where it was cut off: whatever cut in said nothing more"];
   return replyLines(msg);
 }

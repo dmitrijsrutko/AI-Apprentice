@@ -196,7 +196,7 @@ def test_the_page_shares_a_screen_over_the_socket(client: TestClient) -> None:
     with client.websocket_connect(f"/ws/{key}?eyes=sonnet-5-5") as socket:
         ready = socket.receive_json()
         assert ready["eyes"] == {"interval": 1.0, "min_cells": 2}
-        assert [o["name"] for o in ready["choices"]["eyes"]] == ["haiku-4-5", "sonnet-5-5"]
+        assert [o["name"] for o in ready["choices"]["eyes"]] == ["sonnet-5-5", "haiku-4-5"]
         while socket.receive_json()["type"] != "greeting":
             pass
         socket.send_text(json.dumps({"type": "share", "active": True, "surface": "browser"}))

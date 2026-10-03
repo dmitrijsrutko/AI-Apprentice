@@ -36,6 +36,10 @@ class Glimpse:
     """When, as m:ss since the eyes opened, for the note the model reads."""
     app: str
     events: tuple[str, ...]
+    id: str = ""
+    """`g1`, `g2`, …: how the Work Map points at this moment."""
+    frame: bool = False
+    """Its screenshot is stored (`eyes.py`), so the map can show it."""
 
 
 @dataclass(slots=True)
@@ -102,6 +106,16 @@ class Conversation:
     screen: Screen = field(default_factory=Screen)
     seen: list[Glimpse] = field(default_factory=list)
     """What the eyes saw, in order: what `context` interleaves with the messages."""
+    phase: str = "capture"
+    """The apprentice's flow: `capture`, `mapping` (the map is being drawn),
+    `map` (shown and being corrected), `mapped` (confirmed). Other roles stay
+    in `capture`, which is simply the conversation."""
+    mapper: str | None = None
+    """Which map creator draws the Work Map (`workmap.CREATORS`), pinned."""
+    work_map: dict[str, Any] | None = None
+    map_version: int = 0
+    map_note: str = ""
+    """The current map as the model reads it, in `context`."""
     frames: list[dict[str, Any]] = field(default_factory=list)
     """What was sent to the page, in order (`channel.shown`), plus typed turns
     — kept even once the socket has gone, like the history: a reload redraws
@@ -116,7 +130,11 @@ class Conversation:
         call time, so the history itself — the page's replay, the record, the
         judge — holds only what was said."""
         if self.eyes is None:
-            return [m for m in self.messages if m is not self.opening]
+            said = [m for m in self.messages if m is not self.opening]
+            if self.map_note:
+                at = len(said) - 1 if said and said[-1].role == "user" else len(said)
+                said.insert(at, Message("user", self.map_note))
+            return said
         notes: dict[int, list[Message]] = {}
         kept = self.seen[-SCREEN_NOTES:]
         earlier = len(self.seen) - len(kept)
@@ -135,7 +153,9 @@ class Conversation:
             if message is not self.opening:
                 context.append(message)
             context.extend(notes.get(id(message), ()))
-        status = Message("user", eyes_status(self.screen))
+        if self.map_note:
+            context.append(Message("user", self.map_note))
+        status = Message("user", eyes_status(self.screen, self.phase))
         last_user = max(
             (
                 i
@@ -195,8 +215,10 @@ def seen_note(glimpse: Glimpse) -> str:
     return f"[screen {glimpse.clock}{where}: {'; '.join(glimpse.events)}]"
 
 
-def eyes_status(screen: Screen) -> str:
+def eyes_status(screen: Screen, phase: str = "capture") -> str:
     """Whether it can see, right before the turn it is about to answer."""
+    if phase != "capture":
+        return "[eyes: capture is finished — the screen is no longer shared]"
     if not screen.sharing:
         return "[eyes: not sharing — you cannot see their screen right now]"
     now = f" · on screen now: {screen.now}" if screen.now else " · nothing seen yet"

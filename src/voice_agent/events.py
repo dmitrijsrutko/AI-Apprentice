@@ -91,7 +91,16 @@ class End:
     done: "asyncio.Future[None]"
 
 
+@dataclass(frozen=True, slots=True)
+class Announce:
+    """A fixed line to say now — the map being drawn, a step clicked — cutting
+    off whatever the agent is saying when `interrupt`."""
+
+    line: str
+    interrupt: bool = False
+
+
 MicEvent = Partial | Final | NewSession | FloorChanged
 """What the microphone posts."""
 
-Event = MicEvent | Playback | Typed | Speak | HoldOver | ResumeDue | End
+Event = MicEvent | Playback | Typed | Speak | HoldOver | ResumeDue | End | Announce

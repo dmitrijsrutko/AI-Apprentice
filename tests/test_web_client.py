@@ -61,6 +61,7 @@ BROWSER_GLOBALS = {
     "Error",
     "Float32Array",
     "Uint8Array",
+    "encodeURIComponent",
     "Map",
     "WeakMap",
     "Int16Array",
@@ -519,9 +520,9 @@ def test_the_chosen_stack_travels_with_the_socket() -> None:
 
     assert connect, "connect() is gone"
     assert "stackQuery()" in connect.group(0)
-    assert 'for (const group of ["role", "llm", "stt", "tts", "eyes", "judge"])' in start, (
-        "the stack, role and voice model must be sent"
-    )
+    assert (
+        'for (const group of ["role", "llm", "stt", "tts", "eyes", "judge", "mapper"])' in start
+    ), "the stack, role and voice model must be sent"
 
 
 def test_the_model_options_are_named_by_the_server_not_the_page() -> None:
@@ -588,7 +589,7 @@ def test_the_voice_model_is_a_choice_drawn_even_alone() -> None:
     start = without_comments(source("start.js"))
     choosing = re.findall(r'choose\("(\w+)"', start)
 
-    assert choosing == ["role", "llm", "stt", "tts", "eyes", "judge"], (
+    assert choosing == ["role", "llm", "stt", "tts", "eyes", "judge", "mapper"], (
         f"the pickers changed: {choosing}"
     )
     assert "{ single: true }" in start, "a lone voice option is no longer drawn"

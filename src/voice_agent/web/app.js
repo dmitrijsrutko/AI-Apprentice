@@ -3,6 +3,7 @@
 
 import { createAwake, screenLine, screenNote, worthRecording } from "./awake.js";
 import { canShare, createEyes } from "./eyes.js";
+import { progress as mapProgress, renderMap } from "./workmap.js";
 import { paintFloor, record as recordFloor } from "./floor.js";
 import { buildMic, micFailure } from "./mic.js";
 import { WARN_MS, countdown } from "./timer.js";
@@ -10,8 +11,8 @@ import { addMarks, spokenChars } from "./karaoke.js";
 import { createPlayer } from "./player.js";
 import { clientFacts } from "./client.js";
 import {
-  clientError, clientInfo, endRound, interrupted, listenStart, listenStop, playback, screenFrame,
-  share, userMessage,
+  clientError, clientInfo, endRound, interrupted, listenStart, listenStop, mapStep, phase,
+  playback, screenFrame, share, userMessage,
 } from "./protocol.js";
 import { progress, renderRuling } from "./verdict.js";
 import { chosenEars, servedFacts, showStart, stackQuery } from "./start.js";
@@ -21,9 +22,9 @@ import {
 } from "./telemetry.js";
 import { declined, endLines, review } from "./review.js";
 import {
-  add, begin, endButton, eyesBox, floor, form, input, listen, meta, mute, note,
+  add, begin, endButton, eyesBox, floor, flow, flowNext, form, input, listen, meta, mute, note,
   paintListening as paint, paintText, pinLast, setEnabled, shareButton, start, stats, status, stick,
-  thoughts, timer, wrap,
+  thoughts, timer, toMap, wrap,
 } from "./ui.js";
 
 const key = location.pathname.split("/").pop();
@@ -163,6 +164,7 @@ function endConversation(why) {
   // The screen goes with the microphone: nobody is watching it any more.
   eyes?.stop();
   shareButton.disabled = true;
+  flowNext.disabled = true;
   // The reply outruns playback, so seconds of it can still be queued: silenced
   // here, or the agent talks on after the conversation is over.
   player.stop(() => {});
@@ -302,6 +304,80 @@ shareButton.onclick = async () => {
   }
 };
 
+// The apprentice's flow: capture, then the Work Map, then teaching. One button
+// moves it on; the server says where it stands.
+let phaseNow = "capture";
+let mapHolder = null;  // where the map, or the wait for it, sits in the log
+let mapTick = null;
+const FLOW_BUTTON = {
+  capture: ["Finish capture ▶", false],
+  mapping: ["Drawing the map…", true],
+  map: ["Finish map ▶", false],
+  mapped: ["③ Teach — next chapter", true],
+};
+function setPhase(p) {
+  phaseNow = p;
+  const order = ["capture", "map", "teach"];
+  const at = p === "capture" ? 0 : p === "mapped" ? 2 : 1;
+  for (const el of flow.querySelectorAll(".f-step")) {
+    const i = order.indexOf(el.dataset.phase);
+    el.classList.toggle("now", i === at);
+    el.classList.toggle("done", i < at);
+  }
+  const [label, off] = FLOW_BUTTON[p] ?? FLOW_BUTTON.capture;
+  flowNext.textContent = label;
+  flowNext.disabled = off || over;
+  // No new screenshots once capture is over: the map is drawn from what was seen.
+  if (p !== "capture") {
+    eyes?.stop();
+    shareButton.hidden = true;
+  }
+}
+flowNext.onclick = () => {
+  if (!sending()) return;
+  if (phaseNow === "capture") ws.send(phase("map"));
+  else if (phaseNow === "map") ws.send(phase("done"));
+};
+function holder() {
+  if (!mapHolder) mapHolder = add("", "maphold");
+  return mapHolder;
+}
+function waitForMap(msg) {
+  clearInterval(mapTick);
+  const began = performance.now();
+  const paint = () => mapProgress(msg.creator ?? "The map creator", (performance.now() - began) / 1000,
+    msg.expected_s, msg.redraw);
+  if (msg.redraw && mapHolder?.querySelector(".workmap")) {
+    // The map stays readable while it is redrawn; only its footer counts.
+    const card = mapHolder.querySelector(".workmap");
+    card.classList.add("updating");
+    const foot = card.querySelector("footer");
+    mapTick = setInterval(() => { foot.innerHTML = paint(); }, 250);
+    return;
+  }
+  const el = holder();
+  el.innerHTML = `<section class="mapwait" role="status">${paint()}</section>`;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  mapTick = setInterval(() => {
+    const wait = el.querySelector(".mapwait");
+    if (wait) wait.innerHTML = paint();
+  }, 250);
+}
+function showMap(drawn) {
+  clearInterval(mapTick);
+  const el = holder();
+  const first = !el.querySelector(".workmap");
+  stick(() => { el.innerHTML = renderMap(drawn, key); });
+  toMap.hidden = false;
+  // A step opened is a step said: the apprentice reads it out.
+  for (const item of el.querySelectorAll(".m-step")) {
+    item.querySelector("details").addEventListener("toggle", (event) => {
+      if (event.target.open && sending()) ws.send(mapStep(Number(item.dataset.step)));
+    });
+  }
+  if (first) el.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
 function newReply(text, cls) {
   const el = add(text, cls);
   spoken.set(el, { text, ends: [], playedMs: 0, shown: null });
@@ -363,11 +439,17 @@ const handlers = {
     }
     shareButton.hidden = !eyes;
     shareButton.disabled = Boolean(msg.ended);
+    flow.hidden = !msg.mapped;
+    if (msg.mapped) setPhase(msg.phase ?? "capture");
     listen.disabled = !msg.ears;
     // Pressing start was saying "ready"; not again after a refused microphone,
     // which would put a second prompt over the greeting.
     if (msg.ears && !micRefused) beginListening();
     replay(msg.history, msg.frames);
+    // After the conversation it was drawn from, not above it.
+    if (msg.mapped && msg.work_map) {
+      showMap({ map: msg.work_map, version: msg.map_version, creator: msg.mapper?.title });
+    }
     if (msg.ended) {
       add("This conversation has ended.", "note");
       setEnabled(false);
@@ -464,6 +546,29 @@ const handlers = {
   eyes(msg) { addSeen(eyesLine(msg)); },
 
   look() { eyes?.lookNow(); },
+
+  mapping(msg) {
+    if (!msg.redraw) setPhase("mapping");
+    waitForMap(msg);
+  },
+
+  work_map(msg) {
+    showMap(msg);
+    if (phaseNow === "mapping") setPhase("map");
+  },
+
+  map_failed(msg) {
+    clearInterval(mapTick);
+    if (msg.first) {
+      setPhase("capture");
+      holder().innerHTML = `<section class="mapwait"><p class="m-wait">🗺 The map could not be drawn: ` +
+        `${msg.error.replace(/[&<>"']/g, "")}. Press <b>Finish capture</b> to try again.</p></section>`;
+    } else {
+      mapHolder?.querySelector(".workmap")?.classList.remove("updating");
+    }
+  },
+
+  mapped() { setPhase("mapped"); },
 
   floor(msg) { recordFloor(floorEvents, msg, performance.now()); },
 

@@ -6,6 +6,7 @@ moves = ["challenge", "clarify", "redirect", "summarise"]
 assertiveness = "assertive"
 minutes = 6
 judged = true
+offered = false
 +++
 
 ## Job

@@ -208,6 +208,11 @@ Add dependencies with `uv add` (`--dev` for tooling). Never hand-edit `uv.lock`.
 - Never commit secrets: keys live in `.env` (gitignored), nowhere else.
 - Everything the pipeline ingests — transcripts above all — is untrusted input
   that reaches a model. A transcript is not an instruction.
+- **Screenshots are personal data too.** The Work Map keeps the frame behind
+  each reading that saw a change, beside the session record
+  (`sessions/<id>/g<n>.jpg`, at most 200 per conversation). They are served
+  only under the conversation's secret link, and `--purge-sessions` deletes
+  them. Nothing else of a shared screen is stored.
 - **Audio is personal data.** Nothing persists audio; a chapter that does says
   where it goes, how long it lives and how it is deleted. Log metadata and
   timings freely, not raw audio or full transcripts by default.

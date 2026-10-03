@@ -23,9 +23,10 @@ from voice_agent.llm.anthropic_provider import ANTHROPIC_API_KEY
 from voice_agent.llm.http import http_client
 
 MAX_OUTPUT_TOKENS = 400
-"""A short screen summary and a few events. Output is most of a reading's time
-(Haiku, live: 230-376 tokens took 2.0-4.7 s), so the prompt asks for 60 words
-and this stops a reading that ignores it, before it costs the conversation."""
+"""A short screen summary and a few events, for a model that does not think
+first (Haiku). Output is most of a reading's time (Haiku, live: 230-376
+tokens took 2.0-4.7 s), so the prompt asks for 60 words and this stops a
+reading that ignores it, before it costs the conversation."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,13 +40,20 @@ class Option:
     effort: str | None = None
     """Sent as `output_config.effort` when set. Sonnet thinks by default, and
     thinking before describing a screen is time the conversation waits for."""
+    max_tokens: int = MAX_OUTPUT_TOKENS
+    """Thinking counts against it: a model that thinks first needs room for
+    that as well as the JSON, or the reading is cut off mid-object."""
 
 
 MENU: tuple[Option, ...] = (
-    Option("haiku-4-5", "claude-haiku-4-5", "Haiku 4.5", "fastest"),
-    Option("sonnet-5-5", "claude-sonnet-5-5", "Sonnet 5.5", "sharper", effort="low"),
+    Option(
+        "sonnet-5-5", "claude-sonnet-5-5", "Sonnet 5.5", "balanced", effort="low", max_tokens=1200
+    ),
+    Option("haiku-4-5", "claude-haiku-4-5", "Haiku 4.5", "legacy, fastest"),
 )
-"""Fastest first: the first is the default."""
+"""The first is the default. Sonnet, because a shared window shrunk to 1024 px
+leaves a date about 7 px tall: on the frames of a live session Haiku read
+"Fri, 16 Oct" as 10 and 18, Sonnet as 16 every time, and no slower."""
 
 BY_NAME = {option.name: option for option in MENU}
 
@@ -115,6 +123,7 @@ class AnthropicVision:
         self.provider = "anthropic"
         self.model = option.model
         self._effort = option.effort
+        self._max_tokens = option.max_tokens
         self._client = client or AsyncAnthropic(
             api_key=require_env(ANTHROPIC_API_KEY),
             http_client=http_client(DefaultAsyncHttpxClient),
@@ -122,14 +131,19 @@ class AnthropicVision:
 
     async def look(self, jpeg: bytes, previous: str) -> Seen:
         started = timing.now()
-        before = previous.strip() or "nothing: sharing has just started, this is the first frame"
+        before = (
+            f"{previous.strip()} (it may contain misreadings — read every value again "
+            "from the image)"
+            if previous.strip()
+            else "nothing: sharing has just started, this is the first frame"
+        )
         extra: dict[str, Any] = {}
         if self._effort is not None:
             extra["output_config"] = {"effort": self._effort}
         try:
             message = await self._client.messages.create(
                 model=self.model,
-                max_tokens=MAX_OUTPUT_TOKENS,
+                max_tokens=self._max_tokens,
                 system=prompts.load("vision"),
                 messages=[
                     {
@@ -151,6 +165,10 @@ class AnthropicVision:
             )
         except AnthropicError as exc:
             raise ProviderError(f"vision request failed: {exc}") from exc
+        if message.stop_reason == "max_tokens":
+            # A reading cut off mid-JSON would be "repaired" into a screen with
+            # half its values and none of its events: no reading at all is safer.
+            raise ProviderError(f"vision reading cut off at {self._max_tokens} tokens")
         text = "".join(block.text for block in message.content if block.type == "text")
         seen = parse(text, round((timing.now() - started) * 1000), self.model)
         return Seen(

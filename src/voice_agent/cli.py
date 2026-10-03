@@ -1,6 +1,7 @@
 """`uv run voice-agent` — serve the chat page and the conversation socket."""
 
 import argparse
+import contextlib
 import dataclasses
 import logging
 import os
@@ -297,17 +298,28 @@ def purge_sessions(directory: Path | None, traces: Path | None = None) -> None:
         print("Conversations are not being recorded.")
         return
     files = sorted(directory.glob("*.md")) if directory is not None else []
+    # The Work Map's screenshots: one folder of JPEGs per conversation.
+    shots = sorted(directory.glob("*/g*.jpg")) if directory is not None else []
     traced = sorted(traces.glob("*.jsonl")) if traces is not None else []
-    if not files and not traced:
+    if not files and not traced and not shots:
         print(f"No conversations in {directory} and no traces in {traces}.")
         return
-    print(f"{len(files)} conversation(s) in {directory}, {len(traced)} trace(s) in {traces}.")
+    print(
+        f"{len(files)} conversation(s) and {len(shots)} screenshot(s) in {directory}, "
+        f"{len(traced)} trace(s) in {traces}."
+    )
     if input("Delete them all? [y/N] ").strip().casefold() not in ("y", "yes"):
         print("Left alone.")
         return
-    for path in [*files, *traced]:
+    for path in [*files, *traced, *shots]:
         path.unlink()
-    print(f"Deleted {len(files)} conversation(s) and {len(traced)} trace(s).")
+    for folder in {shot.parent for shot in shots}:
+        with contextlib.suppress(OSError):
+            folder.rmdir()  # only if nothing else was put there
+    print(
+        f"Deleted {len(files)} conversation(s), {len(shots)} screenshot(s) "
+        f"and {len(traced)} trace(s)."
+    )
 
 
 def list_voices(provider: str) -> None:

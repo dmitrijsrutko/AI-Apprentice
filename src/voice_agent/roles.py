@@ -17,6 +17,8 @@ A card is Markdown with TOML front matter between `+++` lines:
     assertiveness = "assertive"   # one of ASSERTIVENESS
     minutes = 6                   # optional: the round's length, under any deployment cap
     judged = true                 # optional: a judge rules on the round once it ends
+    mapped = true                 # optional: capture, then a Work Map, then teaching
+    offered = false               # optional: kept, but not on the start screen
     +++
     ## Job / ## Worth it / ## Not worth it / ## When speaking
 """
@@ -75,6 +77,12 @@ class Role:
     shorter of this and the deployment's own budget."""
     judged: bool = False
     """Whether an ended conversation goes to the judge (`judge.py`)."""
+    mapped: bool = False
+    """Whether the conversation runs the apprentice's flow: capture, then a Work
+    Map drawn from it (`workmap.py`), then teaching."""
+    offered: bool = True
+    """Whether the start screen lists it. A card that is not still plays when
+    pre-selected (`VOICE_AGENT_ROLE`) or asked for by URL."""
 
 
 def parse(text: str, slug: str) -> Role:
@@ -115,6 +123,12 @@ def parse(text: str, slug: str) -> Role:
     judged = front.get("judged", False)
     if not isinstance(judged, bool):
         raise ConfigError(f"role {slug!r}: 'judged' must be true or false")
+    mapped = front.get("mapped", False)
+    if not isinstance(mapped, bool):
+        raise ConfigError(f"role {slug!r}: 'mapped' must be true or false")
+    offered = front.get("offered", True)
+    if not isinstance(offered, bool):
+        raise ConfigError(f"role {slug!r}: 'offered' must be true or false")
     return Role(
         slug=slug,
         name=front["name"].strip(),
@@ -128,6 +142,8 @@ def parse(text: str, slug: str) -> Role:
         when_speaking=found["When speaking"],
         minutes=None if minutes is None else float(minutes),
         judged=judged,
+        mapped=mapped,
+        offered=offered,
     )
 
 
