@@ -22,9 +22,10 @@ from voice_agent.errors import ProviderError
 from voice_agent.llm.anthropic_provider import ANTHROPIC_API_KEY
 from voice_agent.llm.http import http_client
 
-MAX_OUTPUT_TOKENS = 1200
-"""A screen summary and a few events. Generous, so a dense screen is cut by the
-prompt's word limit and not by the API mid-JSON."""
+MAX_OUTPUT_TOKENS = 400
+"""A short screen summary and a few events. Output is most of a reading's time
+(Haiku, live: 230-376 tokens took 2.0-4.7 s), so the prompt asks for 60 words
+and this stops a reading that ignores it, before it costs the conversation."""
 
 
 @dataclass(frozen=True, slots=True)

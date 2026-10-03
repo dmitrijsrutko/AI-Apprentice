@@ -26,7 +26,7 @@ would say. It never starts a turn.
 import asyncio
 import contextlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from voice_agent import echo, timing, trace
 from voice_agent.channel import Channel
@@ -200,6 +200,9 @@ class Session:
             if role is not None and thinker is not None
             else None
         )
+        self.looking: Callable[[], Awaitable[None]] | None = None
+        """Asks the eyes for the screen as it is now (`Eyes.request`), when
+        there are eyes: set by the server, called when the user starts speaking."""
         self._initiative = Initiative(
             engine,
             system_prompt,
@@ -266,6 +269,9 @@ class Session:
             case FloorChanged(state):
                 if state == "speaking":
                     self._carry_on()
+                    # The user's voice, not the agent's coming back or a barge-in.
+                    if self.looking is not None and not self._agent_busy():
+                        await self.looking()
                 await self._on_floor(state)
             case Playback(active):
                 self.playback(active)

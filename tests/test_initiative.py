@@ -478,3 +478,36 @@ async def test_screen_activity_stands_the_silence_ladder_down() -> None:
     initiative.reset()  # the user spoke: the ladder is theirs again
     await initiative.tick()
     assert len(clock.reports) == 2 and "trigger" not in clock.reports[1]
+
+
+async def test_a_screen_line_overtaken_by_a_newer_change_is_not_spoken() -> None:
+    """Decided about a screen that is gone: reconsidered with the newer one."""
+    llm = FakeLLM(["About the old screen.", "About the new screen."], delay=0.05)
+    initiative, clock = clock_for(llm, quiet=3.0)
+
+    initiative.notice("old change")
+    deciding = asyncio.create_task(initiative.tick())
+    await asyncio.sleep(0.01)
+    initiative.notice("new change")  # arrives mid-decision
+    await deciding
+
+    assert clock.decisions() == ["superseded"] and clock.spoken == []
+    await initiative.tick()  # at once: the gap does not hold back a superseded line
+    assert [line for line, _ in clock.spoken] == ["About the new screen."]
+
+
+async def test_a_screen_that_never_stops_changing_supersedes_only_once() -> None:
+    """A ticking timer would otherwise buy a decision every couple of seconds
+    and never say a word."""
+    llm = FakeLLM(["First.", "Second.", "Third."], delay=0.05)
+    initiative, clock = clock_for(llm, quiet=3.0)
+
+    for n in range(3):
+        initiative.notice(f"timer {n}")
+        deciding = asyncio.create_task(initiative.tick())
+        await asyncio.sleep(0.01)
+        initiative.notice(f"timer {n} ticked")
+        await deciding
+
+    assert clock.decisions() == ["superseded", "spoke"], "the third waits for the gap"
+    assert len(llm.seen) == 2

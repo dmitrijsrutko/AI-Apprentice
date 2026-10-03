@@ -30,12 +30,13 @@ class FakeVision:
         self.previous: list[str] = []
         self.started = asyncio.Event()
         self.finished: asyncio.Queue[bytes] = asyncio.Queue()
+        self.delays: dict[bytes, float] = {}
 
     async def look(self, jpeg: bytes, previous: str) -> Seen:
         self.read.append(jpeg)
         self.previous.append(previous)
         self.started.set()
-        await asyncio.sleep(self.delay)
+        await asyncio.sleep(self.delays.get(jpeg, self.delay))
         self.finished.put_nowait(jpeg)
         return Seen(
             screen=f"screen {jpeg.decode()}",
@@ -62,7 +63,7 @@ async def settle(vision: FakeVision, count: int) -> None:
     await asyncio.sleep(0.01)
 
 
-async def test_one_frame_in_flight_and_only_the_newest_waits() -> None:
+async def test_a_second_frame_waits_for_the_stagger_and_only_the_newest_waits() -> None:
     vision = FakeVision(delay=0.05)
     eyes = Eyes(vision, Conversation(id="t"), Page())
     await eyes.share(True, "browser", "Skyscanner")
@@ -194,7 +195,7 @@ def test_the_page_shares_a_screen_over_the_socket(client: TestClient) -> None:
     key = client.get("/", follow_redirects=False).headers["location"].removeprefix("/c/")
     with client.websocket_connect(f"/ws/{key}?eyes=sonnet-5-5") as socket:
         ready = socket.receive_json()
-        assert ready["eyes"] == {"interval": 1.0, "threshold": 0.01}
+        assert ready["eyes"] == {"interval": 1.0, "min_cells": 2}
         assert [o["name"] for o in ready["choices"]["eyes"]] == ["haiku-4-5", "sonnet-5-5"]
         while socket.receive_json()["type"] != "greeting":
             pass
@@ -276,3 +277,126 @@ async def test_stopping_the_share_drops_what_was_not_yet_spoken_about() -> None:
     await eyes.share(False)
 
     assert told == [None]
+
+
+async def test_two_readings_overlap_once_the_first_has_run_a_while(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from voice_agent import eyes as eyes_module
+
+    monkeypatch.setattr(eyes_module, "STAGGER_SECONDS", 0.05)
+    vision = FakeVision(delay=0.3)
+    eyes = Eyes(vision, Conversation(id="t"), Page())
+    await eyes.share(True, "browser", "")
+
+    eyes.frame(b"1")
+    eyes.frame(b"2")  # too soon after the first: waits for the stagger
+    await asyncio.sleep(0.1)
+    assert vision.read == [b"1", b"2"], "the waiting frame started once the stagger passed"
+
+    eyes.frame(b"3")  # two in flight: waits
+    eyes.frame(b"4")  # replaces it
+    await settle(vision, 3)
+    assert vision.read == [b"1", b"2", b"4"] and eyes.replaced == 1
+    await eyes.close()
+
+
+async def test_a_reading_overtaken_by_a_newer_one_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from voice_agent import eyes as eyes_module
+
+    monkeypatch.setattr(eyes_module, "STAGGER_SECONDS", 0.0)
+    conversation = Conversation(id="t", eyes="haiku-4-5")
+    vision = FakeVision()
+    vision.delays = {b"old": 0.2, b"new": 0.02}
+    eyes = Eyes(vision, conversation, Page())
+    await eyes.share(True, "browser", "")
+
+    eyes.frame(b"old")
+    eyes.frame(b"new")
+    await settle(vision, 2)
+
+    assert conversation.screen.now == "screen new", "the older screen came back last"
+    assert eyes.stale == 1
+
+
+async def test_the_page_is_asked_to_look_when_the_user_speaks_but_not_too_often() -> None:
+    page = Page()
+    eyes = Eyes(FakeVision(), Conversation(id="t"), page)
+
+    await eyes.request()  # not sharing: nothing to look at
+    await eyes.share(True, "browser", "")
+    await eyes.request()
+    await eyes.request()  # within the gap
+
+    assert [f["type"] for f in page.frames] == ["eyes", "look"]
+
+
+async def test_speech_starting_asks_the_eyes_to_look() -> None:
+    from tests.test_mic import RecordingChannel
+    from voice_agent.events import FloorChanged
+    from voice_agent.session import Session
+
+    session = Session(
+        RecordingChannel(),  # type: ignore[arg-type]
+        Conversation(id="t"),
+        FakeLLM(),
+        None,
+        "system",
+        None,
+        (),
+    )
+    asked: list[bool] = []
+
+    async def looking() -> None:
+        asked.append(True)
+
+    session.looking = looking
+    await session._handle(FloorChanged("speaking"))
+    await session._handle(FloorChanged("micro_pause"))
+
+    assert asked == [True]
+    await session.close()
+
+
+async def test_a_change_reported_by_both_overlapping_readings_is_kept_once() -> None:
+    conversation = Conversation(id="t", eyes="haiku-4-5")
+    noticed: list[str | None] = []
+    eyes = Eyes(FakeVision(), conversation, Page(), noticed.append)
+    await eyes.share(True, "browser", "")
+    twice = Seen(screen="s", app="", events=("filter 'Direct' applied",), doing="", ms=1, model="m")
+
+    await eyes.saw(twice)
+    await eyes.saw(twice)
+
+    assert [g.events for g in conversation.seen] == [("filter 'Direct' applied",)]
+    assert noticed == ["filter 'Direct' applied"]
+
+
+async def test_the_agent_s_own_voice_does_not_make_the_eyes_look() -> None:
+    from tests.test_mic import RecordingChannel
+    from voice_agent.events import FloorChanged
+    from voice_agent.session import Session
+
+    session = Session(
+        RecordingChannel(),  # type: ignore[arg-type]
+        Conversation(id="t"),
+        FakeLLM(["one two three"], pace=0.05),
+        None,
+        "system",
+        None,
+        (),
+    )
+    asked: list[bool] = []
+
+    async def looking() -> None:
+        asked.append(True)
+
+    session.looking = looking
+    await session.submit("hello")
+    await asyncio.sleep(0.02)  # the reply is being written
+    await session._handle(FloorChanged("speaking"))
+
+    assert asked == []
+    await session.close()

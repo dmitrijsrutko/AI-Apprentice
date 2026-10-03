@@ -173,6 +173,13 @@ class Initiative:
         """What the eyes saw that has not been considered yet."""
         self._screen_at: float | None = None
         """When a screen-prompted consideration last ran."""
+        self._seen_version = 0
+        """Counts what the eyes noticed: a screen decision overtaken by a newer
+        change is not spoken."""
+        self._superseded = False
+        """The last screen decision was overtaken. Once, not twice running: a
+        screen that never stops changing (a ticking timer) would otherwise buy
+        a decision every couple of seconds and never say a word."""
 
     def start(self) -> None:
         if self._task is None and self._ladder:
@@ -200,6 +207,7 @@ class Initiative:
         "I'll be quiet now" in the middle of their task is exactly wrong."""
         self._news = seen
         if seen is not None:
+            self._seen_version += 1
             self._rung = len(self._ladder)
 
     async def _run(self) -> None:
@@ -251,6 +259,7 @@ class Initiative:
         usage = Usage()
         if rung is not None:
             nudge = nudge_prompt(rung, quiet)
+        version = self._seen_version
         try:
             with trace.span(
                 "initiative.consider",
@@ -273,7 +282,14 @@ class Initiative:
             return
 
         line = spoken_line(reply)
-        if line is None:
+        overtaken = rung is None and self._seen_version != version
+        if overtaken and not self._superseded:
+            # The screen changed while it decided: what it would say is about a
+            # screen that is gone. Reconsidered with the newer change at once.
+            decision, line = "superseded", None
+            self._screen_at = None
+            self._superseded = True
+        elif line is None:
             decision = "declined"
         elif len(line) > MAX_LINE_CHARS:
             decision, line = "overran", None
@@ -281,6 +297,8 @@ class Initiative:
             decision, line = "yielded", None
         else:
             decision = "spoke"
+        if rung is None and decision != "superseded":
+            self._superseded = False
         await self._note(index, quiet, decision, started, usage, line=line or "", seen=seen)
         # `Session.speak` re-checks the moment itself.
         if line is not None:

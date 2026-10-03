@@ -15,6 +15,86 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 3 — Live eyes: the screen as it is when you ask
+
+Two live sessions on Skyscanner felt "not truly interactive", and the record
+says why. The journey-duration slider went from 47.5 h to 24 h while
+"Searching…" covered the page. The last reading of it was 23 s old when the
+reply said *"the slider's still at forty-seven and a half"*, and the reading
+that showed 17–24 h arrived four seconds into a 10.7 s answer. The lag had
+four parts, each measured in the record:
+- a reading took 2.0–4.7 s;
+- waiting behind the call in flight put readings 5–9 s behind the screen;
+- DeepSeek took 1.1–3.6 s to its first word;
+- replies ran 10–23 s while the screen kept moving.
+
+This chapter takes on each one.
+
+**What changed**
+- **Look on speech** (`session.py`, `eyes.py`, `web/eyes.js`): when the voice
+  detector hears the user start speaking, the page is asked for the screen
+  *now* (`look`, at most every 3 s), past the change threshold. The reading
+  runs while they talk and the recognizer commits, so "what's set now?" is
+  answered from the screen as it was when they asked.
+- **Faster readings** (`prompts/vision.md`, `llm/vision.py`, `web/eyes.js`):
+  events first, a 60-word screen summary that keeps the values in play, a
+  400-token ceiling, and 1024 px frames at quality 0.6. The prompt now
+  insists on the current value of anything just changed, overlay or not.
+- **Two readings in flight** (`eyes.py`): staggered by at least 1 s, newest
+  frame waiting. Results are applied in the order the frames were taken, and a
+  reading overtaken by a newer one is dropped (`stale`). The cap is 900
+  readings (`VOICE_AGENT_EYES_MAX_FRAMES`).
+- **Shorter replies** (`ai_apprentice.md`): about 25 words, and what it sees
+  named in a phrase, never a tour of the page. The explain-back is still the
+  one long turn.
+- **A stale unprompted line is not spoken** (`initiative.py`): if the screen
+  changes while a screen-prompted line is being decided, the decision is
+  `superseded` and made again at once with the newer change.
+
+**Design decisions**
+- **Look on speech, not faster sampling.** Sampling was already every second;
+  the delay was in reading. Reading the screen at the moment a question
+  starts costs about one frame per question, and buys the moment that matters.
+- **Two calls, not a queue.** Staggered overlap halves the time between
+  readings, and ordering by frame keeps a slow early reading from
+  overwriting a fresh one.
+- **Answers are never cut off mid-sentence by the screen.** A voice that stops
+  itself while you scroll sounds broken. Only unprompted lines, which nobody
+  is waiting for, yield to a newer screen.
+
+**Latency impact** — a reading of the same screenshot (Haiku 4.5, local):
+**1.1–2.4 s** (77–107 tokens out, about 1,560 in), against 2.3–2.5 s (115+ out,
+1,960 in) before; on Fly it was 2.0–4.7 s at 230–376 out. With two in flight
+and look on speech, the screen a reply reads should be about 1–3 s old
+instead of 5–23 s. Not yet measured live.
+
+**Deliberately not done** — cutting a reply mid-speech when the screen changes;
+input-activity detection; a faster default reasoning model (the user chose
+DeepSeek's smartest; Haiku 4.5 starts in about 1 s).
+
+**Verification** — `uv run verify` (940 passed). Real readings timed as
+above. Look on speech needs a voice, so it is unit-tested only until the
+next live session.
+
+**Fixes**
+- The change test could not see a character. "1%" meant 1% of a 64x36
+  thumbnail, whose cells average about 30x30 screen pixels: one character
+  moved its cell by about 8 grey levels against a bar of 24, and a slider and
+  its label were 1-3 cells against a bar of 23. Only large changes (a
+  "Searching…" overlay) were sent. The page now compares a 256x144 thumbnail
+  (one character is 1-2 cells), sends on 2 changed cells
+  (`VOICE_AGENT_EYES_MIN_CELLS`, which replaces `…_THRESHOLD`), and skips a
+  frame matching any of the last 4 sent, so a blinking caret is sent twice
+  and then never again.
+- Only a caret-sized change (at most 2x4 cells) may be skipped for matching a
+  recent frame. As first written, any change back to a recent screen was
+  skipped, so 24 h → 30 h → 24 h stayed "30 h".
+- A screen decision is superseded at most once in a row: a ticking timer
+  overtook every decision and bought a billed call every couple of seconds.
+- A change reported by both overlapping readings is kept once.
+- The page is asked to look only when the user speaks, not when the agent
+  does.
+
 ## Chapter 2 — Eyes: the apprentice sees the screen you share
 
 The apprentice can now see. A **🖥 share** button opens the browser's own

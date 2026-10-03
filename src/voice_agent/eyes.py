@@ -1,10 +1,13 @@
-"""The eyes: the screen the user shares, read one changed frame at a time.
+"""The eyes: the screen the user shares, read as it changes.
 
 The page decides *which* frames are worth reading (it compares each with the
-last one it sent, `web/eyes.js`); this decides *when*: **one vision call in
-flight, the newest frame waiting**. A frame that arrives during a call replaces
-the one waiting, so a screen that changes faster than the model reads is seen
-as it is now, never as a backlog of how it was.
+last one it sent, `web/eyes.js`); this decides *when*: **at most two vision
+calls in flight, a second only once the first has run a while, and the newest
+frame waiting**. A frame that arrives while no call may start replaces the one
+waiting, so a screen that changes faster than the model reads is seen as it is
+now, never as a backlog of how it was. Two calls overlapping halve the time
+between readings; their results are applied in the order the frames were
+taken, and one overtaken by a newer result is dropped.
 
 Frames are never kept: each lives for the length of its call. What was seen is
 kept as text, in the conversation (`Conversation.seen`), where every call to
@@ -27,6 +30,18 @@ SURFACES = {"browser": "a browser tab", "window": "a window", "monitor": "the en
 """The page's `displaySurface`, as the model and the record word it."""
 
 LABEL_CHARS = 80
+
+IN_FLIGHT = 2
+"""Vision calls at once. One read lags the screen by up to two calls (the one
+in flight, then its own); two, staggered, by about one and a half."""
+
+STAGGER_SECONDS = 1.0
+"""A second call starts only this long after the newest one began: two calls
+on the same instant would read the same screen twice."""
+
+LOOK_GAP_SECONDS = 3.0
+"""At most one "look now" per this long: a turn's speech can start and stop
+several times before it is committed."""
 
 
 def clock(seconds: float) -> str:
@@ -57,12 +72,22 @@ class Eyes:
         self._limit: asyncio.Task[None] | None = None
         self._opened = timing.now()
         self._waiting: bytes | None = None
-        self._task: asyncio.Task[None] | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._newest_at: float | None = None
+        """When the newest call in flight began, for the stagger."""
+        self._retry: asyncio.TimerHandle | None = None
+        self._taken = 0
+        """Frames sent to the model so far, numbered in the order taken."""
+        self._applied = 0
+        """The newest frame whose reading has been kept."""
+        self._looked_at: float | None = None
         self._share = 0
         """Which share this is: a result for an earlier one is not reported."""
         self.looked = 0
         self.replaced = 0
         """Frames that waited and were overtaken by a newer one, never read."""
+        self.stale = 0
+        """Readings that came back after a newer one had been kept: dropped."""
 
     @property
     def sharing(self) -> bool:
@@ -99,12 +124,66 @@ class Eyes:
                 # Held, so the notice is not collected before it is sent.
                 self._limit = asyncio.create_task(self._say_limit())
             return
-        if self._task is not None and not self._task.done():
-            if self._waiting is not None:
-                self.replaced += 1
-            self._waiting = jpeg
+        if self._may_start():
+            self._start(jpeg)
             return
-        self._task = asyncio.create_task(self._read(jpeg, self._share))
+        if self._waiting is not None:
+            self.replaced += 1
+        self._waiting = jpeg
+        self._later()
+
+    async def request(self) -> None:
+        """Ask the page for the screen as it is now, whether or not it changed
+        much: the user has started speaking, and their question will most
+        likely be about what is on it. Read while they talk, it is ready by
+        the time the turn is committed."""
+        now = timing.now()
+        if not self.sharing:
+            return
+        if self._looked_at is not None and now - self._looked_at < LOOK_GAP_SECONDS:
+            return
+        self._looked_at = now
+        await self._report({"type": "look"})
+
+    def _may_start(self) -> bool:
+        if len(self._tasks) >= IN_FLIGHT:
+            return False
+        newest = self._newest_at
+        return newest is None or not self._tasks or timing.now() - newest >= STAGGER_SECONDS
+
+    def _start(self, jpeg: bytes) -> None:
+        self._taken += 1
+        self._newest_at = timing.now()
+        task = asyncio.create_task(self._look(jpeg, self._share, self._taken))
+        self._tasks.add(task)
+        task.add_done_callback(self._finished)
+
+    def _finished(self, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
+        self._next()
+
+    def _next(self) -> None:
+        """Start the waiting frame, if one may start now; else try again once
+        the stagger allows it."""
+        self._retry = None
+        if self._waiting is None or not self.sharing:
+            return
+        if self._max_frames is not None and self._reads >= self._max_frames:
+            self._waiting = None
+            return
+        if self._may_start():
+            jpeg, self._waiting = self._waiting, None
+            self._start(jpeg)
+        else:
+            self._later()
+
+    def _later(self) -> None:
+        """A frame waits on the stagger alone: start it when that has passed,
+        not only when a call finishes."""
+        if self._retry is not None or len(self._tasks) >= IN_FLIGHT or self._newest_at is None:
+            return
+        due = STAGGER_SECONDS - (timing.now() - self._newest_at)
+        self._retry = asyncio.get_running_loop().call_later(max(0.0, due), self._next)
 
     async def _say_limit(self) -> None:
         await self._report(
@@ -115,13 +194,7 @@ class Eyes:
             }
         )
 
-    async def _read(self, jpeg: bytes | None, share: int) -> None:
-        while jpeg is not None:
-            await self._look(jpeg, share)
-            jpeg, self._waiting = self._waiting, None
-            share = self._share
-
-    async def _look(self, jpeg: bytes, share: int) -> None:
+    async def _look(self, jpeg: bytes, share: int, taken: int) -> None:
         screen = self._conversation.screen
         if self._max_frames is not None and self._reads >= self._max_frames:
             return  # waited while the cap was reached
@@ -156,6 +229,10 @@ class Eyes:
         self.looked += 1
         if share != self._share or not self.sharing:
             return  # the share stopped or changed while it was being read
+        if taken < self._applied:
+            self.stale += 1
+            return  # a newer frame's reading came back first
+        self._applied = taken
         await self.saw(seen)
 
     async def saw(self, seen: Seen) -> None:
@@ -163,6 +240,22 @@ class Eyes:
         conversation = self._conversation
         conversation.screen.now = seen.screen
         when = clock(timing.now() - self._opened)
+        # Two readings in flight compare their frames with the same earlier
+        # screen, so the second can report again what the first just did.
+        before = (
+            {e.casefold() for e in conversation.seen[-1].events} if conversation.seen else set()
+        )
+        fresh = tuple(e for e in seen.events if e.casefold() not in before)
+        seen = Seen(
+            screen=seen.screen,
+            app=seen.app,
+            events=fresh,
+            doing=seen.doing,
+            ms=seen.ms,
+            model=seen.model,
+            input_tokens=seen.input_tokens,
+            output_tokens=seen.output_tokens,
+        )
         if seen.events:
             last = conversation.messages[-1] if conversation.messages else None
             conversation.seen.append(Glimpse(last, when, seen.app, seen.events))
@@ -184,9 +277,13 @@ class Eyes:
             self._noticed("; ".join(seen.events))
 
     async def close(self) -> None:
-        task, self._task = self._task, None
         self._waiting = None
-        if task is not None:
+        if self._retry is not None:
+            self._retry.cancel()
+            self._retry = None
+        tasks, self._tasks = list(self._tasks), set()
+        for task in tasks:
             task.cancel()
+        for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task

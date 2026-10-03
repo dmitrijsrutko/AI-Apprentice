@@ -11,12 +11,18 @@ and a description of what the screen showed before it. Report what is on the
 screen now and what changed since before. Someone who cannot see the screen
 will rely on what you write to follow along and ask good questions.
 
-Reply with one JSON object and nothing else:
+Reply with one JSON object and nothing else, in this order — the changes
+first, because they are what matters most and fastest:
 
-{"app": "<the application or website and page, e.g. 'Skyscanner — flight results' or 'Excel — Q3 invoices.xlsx'>",
- "screen": "<what is on screen now, at most 120 words: the key visible text, values, options and their prices or numbers, what is selected, highlighted, open or focused, any dialog or error>",
- "events": ["<one short line per meaningful change since the previous screen>"],
- "doing": "<in a few words, what the person appears to be doing right now, only if the screen makes it plain; else empty>"}
+{"events": ["<one short line per meaningful change since the previous screen>"],
+ "app": "<the application or website and page, e.g. 'Skyscanner — flight results'>",
+ "screen": "<what is on screen now, at most 60 words: the values the person is working with — prices, times, dates, filter and slider settings, what is selected, open or focused, any dialog or error. Not page furniture, not anything unchanged and unimportant>",
+ "doing": "<a few words, only if the screen makes it plain; else empty>"}
+
+Be quick and terse: every word you write is time the conversation waits.
+Always state the current value of anything the person just changed — a
+slider's range, a filter's setting, a field's content — even when a
+"loading" or "searching" overlay covers part of the page.
 
 What counts as an event: a page or app opened or switched to; a search run; a
 filter or sort applied or removed; an item opened, selected, ticked or

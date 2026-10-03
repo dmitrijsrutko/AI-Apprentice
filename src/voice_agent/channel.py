@@ -147,7 +147,7 @@ class Channel:
         return True
 
 
-UNSHOWN = frozenset({"ready", "delta", "marks", "floor", "transcript_dropped", "mic_level"})
+UNSHOWN = frozenset({"ready", "delta", "marks", "floor", "transcript_dropped", "mic_level", "look"})
 """Frames a reload does not redraw: `ready` carries the whole history, text
 arrives whole in `reply_end`, and the rest paint something only while live."""
 

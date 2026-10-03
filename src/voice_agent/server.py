@@ -304,7 +304,7 @@ class Agent:
             "eyes": (
                 {
                     "interval": self.settings.eyes_interval,
-                    "threshold": self.settings.eyes_threshold,
+                    "min_cells": self.settings.eyes_min_cells,
                 }
                 if self.backends.eyes
                 else None
@@ -572,6 +572,8 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
         if eyes_name is not None
         else None
     )
+    if eyes is not None:
+        session.looking = eyes.request
     budget_seconds = round_budget(agent.settings.session_budget, role)
     left = time_left(budget_seconds, conversation)
     await channel.send_json(

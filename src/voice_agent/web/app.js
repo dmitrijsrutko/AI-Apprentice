@@ -358,7 +358,7 @@ const handlers = {
         share,
         frame: screenFrame,
         interval: msg.eyes.interval,
-        threshold: msg.eyes.threshold,
+        minCells: msg.eyes.min_cells,
       });
     }
     shareButton.hidden = !eyes;
@@ -462,6 +462,8 @@ const handlers = {
   seen(msg) { addSeen(seenLine(msg), msg.screen); },
 
   eyes(msg) { addSeen(eyesLine(msg)); },
+
+  look() { eyes?.lookNow(); },
 
   floor(msg) { recordFloor(floorEvents, msg, performance.now()); },
 

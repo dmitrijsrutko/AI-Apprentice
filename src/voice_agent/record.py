@@ -34,7 +34,7 @@ SPEAKERS = {
 """Frames carrying something the user read or heard. Everything else is a note
 attached to whatever came before it."""
 
-NOISE = frozenset({"delta", "marks", "audio_start", "reply_start", "floor"})
+NOISE = frozenset({"delta", "marks", "audio_start", "reply_start", "floor", "look"})
 """One frame per token, per audio chunk, or per change of who is speaking.
 Keeping them would bury the conversation in its own telemetry; the trace holds
 them."""
