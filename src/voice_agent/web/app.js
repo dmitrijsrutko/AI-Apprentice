@@ -2,6 +2,7 @@
 // Each module below owns one job; this file owns the state they share.
 
 import { createAwake, screenLine, screenNote, worthRecording } from "./awake.js";
+import { canShare, createEyes } from "./eyes.js";
 import { paintFloor, record as recordFloor } from "./floor.js";
 import { buildMic, micFailure } from "./mic.js";
 import { WARN_MS, countdown } from "./timer.js";
@@ -9,18 +10,20 @@ import { addMarks, spokenChars } from "./karaoke.js";
 import { createPlayer } from "./player.js";
 import { clientFacts } from "./client.js";
 import {
-  clientError, clientInfo, endRound, interrupted, listenStart, listenStop, playback, userMessage,
+  clientError, clientInfo, endRound, interrupted, listenStart, listenStop, playback, screenFrame,
+  share, userMessage,
 } from "./protocol.js";
 import { progress, renderRuling } from "./verdict.js";
 import { chosenEars, servedFacts, showStart, stackQuery } from "./start.js";
 import {
-  audioLine, committedLine, echoLine, gapsLine, initiativeLine, quietLine, thoughtLine,
-  truncatedLine,
+  audioLine, committedLine, echoLine, eyesLine, gapsLine, initiativeLine, quietLine, seenLine,
+  thoughtLine, truncatedLine,
 } from "./telemetry.js";
 import { declined, endLines, review } from "./review.js";
 import {
-  add, begin, endButton, floor, form, input, listen, meta, mute, note, paintListening as paint, paintText,
-  pinLast, setEnabled, start, stats, status, stick, thoughts, timer, wrap,
+  add, begin, endButton, eyesBox, floor, form, input, listen, meta, mute, note,
+  paintListening as paint, paintText, pinLast, setEnabled, shareButton, start, stats, status, stick,
+  thoughts, timer, wrap,
 } from "./ui.js";
 
 const key = location.pathname.split("/").pop();
@@ -157,6 +160,9 @@ function endConversation(why) {
     mic.context.close();
     mic = null;
   }
+  // The screen goes with the microphone: nobody is watching it any more.
+  eyes?.stop();
+  shareButton.disabled = true;
   // The reply outruns playback, so seconds of it can still be queued: silenced
   // here, or the agent talks on after the conversation is over.
   player.stop(() => {});
@@ -262,6 +268,40 @@ function onMessage(event) {
   handlers[msg.type]?.(msg);
 }
 
+// What the eyes saw: one line, and the whole screen as they described it on a click.
+function addSeen(text, screen) {
+  const el = add("", "note seen");
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = text;
+  details.appendChild(summary);
+  if (screen) {
+    const body = document.createElement("div");
+    body.className = "screen";
+    body.textContent = screen;
+    details.appendChild(body);
+  }
+  stick(() => el.appendChild(details));
+  return el;
+}
+
+// The shared screen. Built once the server says this conversation has eyes.
+let eyes = null;
+function paintShare(sharing) {
+  shareButton.textContent = sharing ? "⏹ stop sharing" : "🖥 share";
+  shareButton.classList.toggle("sharing", sharing);
+}
+shareButton.onclick = async () => {
+  if (!eyes) return;
+  if (eyes.isSharing()) { eyes.stop(); return; }
+  try {
+    await eyes.start();
+  } catch (err) {
+    // Cancelling the picker lands here too: worth a word, not an error.
+    if (err?.name !== "NotAllowedError") add("screen sharing failed: " + (err?.message ?? err), "error");
+  }
+};
+
 function newReply(text, cls) {
   const el = add(text, cls);
   spoken.set(el, { text, ends: [], playedMs: 0, shown: null });
@@ -299,7 +339,8 @@ const handlers = {
     const heard = langs.length ? ` · ${langs.length} languages` : "";
     const ears = msg.ears ? `🎤 ${msg.ears.provider} ${msg.ears.sample_rate / 1000}kHz${heard}` : "🎤 deaf";
     const role = msg.role ? ` · 🎭 ${msg.role.name}` : "";
-    meta.textContent = `${msg.provider} · ${msg.model}${role} · 🔊 ${voice} · ${ears} · ${msg.session.slice(0, 8)}…`;
+    const seeing = msg.eyes_model ? ` · 👁 ${msg.eyes_model.replace("claude-", "")}` : "";
+    meta.textContent = `${msg.provider} · ${msg.model}${role} · 🔊 ${voice} · ${ears}${seeing} · ${msg.session.slice(0, 8)}…`;
     meta.title = langs.length ? `heard: ${langs.join(" ")}` : "";
     sampleRate = msg.ears ? msg.ears.sample_rate : 16000;
     // Compared with the rate the page *asked* for: a browser that ignores the
@@ -310,6 +351,18 @@ const handlers = {
       mic = null;
     }
     if (msg.voice) player.setRate(msg.voice.sample_rate);
+    if (msg.eyes && msg.eyes_model && canShare() && !eyes) {
+      eyes = createEyes({
+        send: (m) => { if (sending()) ws.send(m); },
+        onChange: paintShare,
+        share,
+        frame: screenFrame,
+        interval: msg.eyes.interval,
+        threshold: msg.eyes.threshold,
+      });
+    }
+    shareButton.hidden = !eyes;
+    shareButton.disabled = Boolean(msg.ended);
     listen.disabled = !msg.ears;
     // Pressing start was saying "ready"; not again after a refused microphone,
     // which would put a second prompt over the greeting.
@@ -405,6 +458,10 @@ const handlers = {
   },
 
   initiative(msg) { add(initiativeLine(msg), "note think thought"); },
+
+  seen(msg) { addSeen(seenLine(msg), msg.screen); },
+
+  eyes(msg) { addSeen(eyesLine(msg)); },
 
   floor(msg) { recordFloor(floorEvents, msg, performance.now()); },
 
@@ -626,6 +683,7 @@ function replay(history, frames) {
     return;
   }
   for (const entry of review(frames)) {
+    if (entry.cls === "note seen") { addSeen(entry.text, entry.screen); continue; }
     const el = add(entry.text, entry.cls);
     if (entry.shown != null) paintText(el, entry.text, entry.shown);
     for (const n of entry.notes) note(el, n.text, n.cls);
@@ -662,6 +720,7 @@ function bindSwitch(box, name) {
 }
 bindSwitch(stats, "stats");
 bindSwitch(thoughts, "thoughts");
+bindSwitch(eyesBox, "eyes");
 
 form.onsubmit = (event) => {
   event.preventDefault();

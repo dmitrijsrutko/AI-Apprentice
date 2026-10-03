@@ -210,6 +210,15 @@ class Session:
             ladder=LADDER if ladder is None else ladder,
         )
 
+    def noticed(self, seen: str | None) -> None:
+        """The eyes saw something change: the clock may speak about it at the
+        next pause (`Initiative.notice`). It also keeps listening open: working
+        on the screen is not the silence the idle window is for. `None`:
+        sharing stopped, and nothing seen before is still worth a word."""
+        if seen is not None and self.mic is not None:
+            self.mic.active()
+        self._initiative.notice(seen)
+
     def start(self) -> None:
         """Begin considering whether to speak; called once the greeting is out."""
         if self.mic is not None:

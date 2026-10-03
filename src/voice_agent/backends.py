@@ -22,8 +22,10 @@ from collections.abc import Mapping, Sequence
 from voice_agent import judge as judging
 from voice_agent.conversation import Conversation
 from voice_agent.llm import LLM, create_llm
+from voice_agent.llm import vision as eyes_menu
 from voice_agent.llm.registry import BY_NAME, Choice, default_choice, offered
 from voice_agent.llm.traced import Traced
+from voice_agent.llm.vision import Vision, create_vision
 from voice_agent.roles import NO_ROLE, Role
 from voice_agent.stt import STT, create_stt
 from voice_agent.stt.registry import NO_EARS, describe
@@ -57,8 +59,16 @@ class Backends:
         voice: str | None = None,
         speaker: TTS | None = None,
         judge: LLM | None = None,
+        vision: Vision | None = None,
+        sees: bool = True,
     ) -> None:
         self._silence = silence
+        self.eyes: tuple[eyes_menu.Option, ...] = (
+            (eyes_menu.MENU if vision is not None else eyes_menu.offered()) if sees else ()
+        )
+        """The eyes the page offers: Claude's, with its key; none without."""
+        self._fixed_vision = vision
+        self._built_visions: dict[str, Vision] = {}
         self.judges: tuple[Choice, ...] = judging.offered()
         """Who may rule on a judged round; the first is the default."""
         self._fixed_judge = Traced(judge) if judge is not None else None
@@ -128,6 +138,23 @@ class Backends:
             conversation.voice or tts_registry.NO_VOICE,
         )
 
+    def eyes_for(self, conversation: Conversation, asked: Mapping[str, str]) -> str | None:
+        """The eyes this conversation sees with, pinned on first connect; `None`
+        when this deployment offers none."""
+        if conversation.eyes is None and self.eyes:
+            wanted = asked.get("eyes", "")
+            names = {option.name for option in self.eyes}
+            conversation.eyes = wanted if wanted in names else self.eyes[0].name
+        return conversation.eyes
+
+    def vision(self, name: str) -> Vision:
+        if self._fixed_vision is not None:
+            return self._fixed_vision
+        if name not in self._built_visions:
+            logger.info("building the %s eyes", name)
+            self._built_visions[name] = create_vision(name)
+        return self._built_visions[name]
+
     def judge_for(self, conversation: Conversation, asked: Mapping[str, str]) -> str:
         """The judge this conversation is ruled on by, pinned on first connect."""
         if conversation.judge is None:
@@ -162,6 +189,17 @@ class Backends:
             for r in self.roles
         ]
         return {
+            "eyes": [
+                {
+                    "name": option.name,
+                    "title": option.title,
+                    "hint": option.hint,
+                    "provider": "anthropic",
+                    "model": option.model,
+                    "default": index == 0,
+                }
+                for index, option in enumerate(self.eyes)
+            ],
             "role": roles,
             "llm": [
                 {

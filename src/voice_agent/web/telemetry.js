@@ -31,7 +31,9 @@ export function replyLines(msg) {
 
 // An unprompted line's timings are zero by construction — it was written before
 // the turn began — so it says where the real cost is instead.
-export const unpromptedLine = (msg) => `🗣 unprompted · rung ${msg.initiative} · ${msg.chars} chars · decided above`;
+export const unpromptedLine = (msg) => msg.initiative === 0
+  ? `🗣 unprompted · about the screen · ${msg.chars} chars · decided above`
+  : `🗣 unprompted · rung ${msg.initiative} · ${msg.chars} chars · decided above`;
 
 export function audioLine(msg) {
   const length = `${msg.seconds.toFixed(1)} s of speech · ${(msg.bytes / 1024).toFixed(0)} kB in ${msg.chunks} chunks`;
@@ -79,7 +81,29 @@ const VERDICTS = {
 };
 
 // Every consideration, spoken or not: the declines are the behaviour being built.
+// What the eyes saw in one changed frame: the changes, then where and how long
+// reading it took. The whole screen description is shown on a click.
+export function seenLine(msg) {
+  if (msg.failed) return `👁 could not read the screen — ${msg.failed}`;
+  const what = msg.events?.length ? msg.events.join(" · ") : "no change worth noting";
+  const where = msg.app ? ` — ${msg.app}` : "";
+  const cost = msg.input_tokens ? ` · ${msg.input_tokens} in, ${msg.output_tokens} out` : "";
+  const model = msg.model ? ` · ${String(msg.model).replace("claude-", "")}` : "";
+  return `👁 ${msg.at ?? ""} ${what}${where} · read in ${ms(msg.ms)}${model}${cost}`;
+}
+
+// Sharing started, switched or stopped.
+export function eyesLine(msg) {
+  return msg.sharing ? `👁 sharing ${msg.surface} — the apprentice can see it` : "👁 not sharing — the apprentice can't see your screen";
+}
+
 export function initiativeLine(msg) {
+  if (msg.trigger === "screen") {
+    const verdict = msg.decision === "failed"
+      ? `⚠️ could not decide — ${msg.message}`
+      : VERDICTS[msg.decision] || msg.decision;
+    return `${verdict} · about what it saw: ${msg.seen} · decided in ${ms(msg.consider_ms)}`;
+  }
   const verdict = msg.decision === "failed"
     ? `⚠️ could not decide — ${msg.message}`
     : VERDICTS[msg.decision] || msg.decision;

@@ -26,10 +26,11 @@ IDLE_TIMEOUT_SECONDS = 30.0
 """How long with no *speech* before listening stops. The microphone streams
 silence continuously, so the signal is the absence of partial transcripts."""
 
-SESSION_CAP_SECONDS = 360.0
+SESSION_CAP_SECONDS = 1800.0
 """A backstop for a room that never stops producing partials (a television).
-Not shorter than the public demo's conversation budget (`fly.toml`), or
-listening would stop before the conversation does."""
+Not shorter than the public demo's conversation budget
+(`VOICE_AGENT_SESSION_BUDGET` in `fly.toml`), or listening would stop before
+the conversation does; a test holds the two together."""
 
 MAX_HOLD_SECONDS = 60.0
 """How long expiry may be suspended before the hold is assumed lost (a closed
@@ -115,6 +116,9 @@ class Mic:
         self._keepalive: asyncio.Task[None] | None = None
         self._started = 0.0
         self._heard_speech_at = 0.0
+        self._active_at = 0.0
+        """When the user last did something other than speak (the shared screen
+        changed). Keeps listening open; never counts as breaking a silence."""
         self._drawn = False
         """Partial text is on the page that no commit has finished yet."""
         self._hears = stt.sample_rate == VAD_SAMPLE_RATE
@@ -292,6 +296,16 @@ class Mic:
                 self._last_frame_at = timing.now()
                 self._frames.put_nowait(silence)
 
+    def active(self) -> None:
+        """Something other than speech shows the user is there and working —
+        a change on the screen they share. Restarts the idle window, so
+        someone working silently is not taken for someone who has gone.
+
+        Not `_heard_speech_at`: that is also the silence `quiet_for` measures,
+        and a screen change is not the user speaking — counted as one, every
+        unprompted line decided while frames arrive would yield to nobody."""
+        self._active_at = timing.now()
+
     def expect_silence(self, seconds: float) -> None:
         """Start counting the user's silence only once the reply has played.
 
@@ -348,7 +362,7 @@ class Mic:
                 self._heard_speech_at = now
                 continue
 
-            if now - self._heard_speech_at >= self.idle_timeout:
+            if now - max(self._heard_speech_at, self._active_at) >= self.idle_timeout:
                 # "You said nothing" and "your browser sent nothing" differ in
                 # whose doing it is.
                 if self._client_frames:

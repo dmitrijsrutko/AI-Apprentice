@@ -49,6 +49,9 @@ def page_event(direction: str, payload: Mapping[str, Any]) -> None:
     for key, value in payload.items():
         if key in TRACE_FIELDS:
             continue  # the trace's own: a frame must not relabel its line
+        if key == "jpeg":
+            attrs["jpeg_chars"] = len(value) if isinstance(value, str) else 0
+            continue  # a screen frame: its size, never the image
         if direction == "in":
             # From the client: scalars only, strings cut, so a page cannot
             # fill the trace.

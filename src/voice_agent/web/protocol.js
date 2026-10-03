@@ -26,3 +26,10 @@ export const clientInfo = (facts) => JSON.stringify({ type: "client", ...facts }
 
 export const clientError = (what, err) =>
   JSON.stringify({ type: "client_error", what, name: String(err?.name ?? ""), message: String(err?.message ?? err).slice(0, 200) });
+
+// The shared screen: sharing started, switched or stopped, and a changed frame
+// (a JPEG, base64, without the data-URL prefix).
+export const share = (active, surface = "", label = "") =>
+  JSON.stringify({ type: "share", active, surface, label });
+
+export const screenFrame = (jpeg, changed) => JSON.stringify({ type: "frame", jpeg, changed });

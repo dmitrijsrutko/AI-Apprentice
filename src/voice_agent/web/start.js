@@ -35,7 +35,7 @@ function picked(group) {
 // The chosen role, engine, ears, voice model and judge as a query string.
 export function stackQuery() {
   const stack = new URLSearchParams();
-  for (const group of ["role", "llm", "stt", "tts", "judge"]) {
+  for (const group of ["role", "llm", "stt", "tts", "eyes", "judge"]) {
     const value = picked(group);
     if (value) stack.set(group, value);
   }
@@ -116,6 +116,10 @@ export function showStart(known) {
       (o) => `${escape(vendor(o))} ${escape(o.title)} <small>${escape(o.hint)}</small>`,
       { single: true });
   }
+  // What reads a shared screen. Claude only: DeepSeek has no vision.
+  choose("eyes", "Eyes", known.choices?.eyes ?? [],
+    (o) => `${escape(vendor(o))} ${escape(o.title)} <small>${escape(o.hint)}</small>`,
+    { asServed: true });
 
   // Shown only while a judged role is picked (or is the only one there is).
   const judges = choose("judge", "Judge", known.choices?.judge ?? [],

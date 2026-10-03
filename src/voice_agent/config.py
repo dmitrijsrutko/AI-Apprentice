@@ -69,6 +69,16 @@ class Settings:
     admin_key: str | None = None
     """The owner's key to `/admin`; unset, the page does not exist. It also
     keys the visitor hash in the records, so rotating it starts new visitors."""
+    eyes_interval: float = 1.0
+    """Seconds between the page's looks at a shared screen. Only a frame that
+    changed is sent, and only one is read at a time (`eyes.py`)."""
+    eyes_threshold: float = 0.01
+    """The share of a frame that must change before it is sent: 1% of a 64x36
+    thumbnail is about 23 pixels, a line of text but not a blinking cursor."""
+    eyes_max_frames: int | None = 600
+    """How many frames one conversation may have read: at one every ~2.5 s,
+    about 25 minutes of a screen that never stops changing. A spend cap for the
+    public instance; `off` for none."""
 
 
 def load_settings() -> Settings:
@@ -95,7 +105,16 @@ def load_settings() -> Settings:
         mints_per_ip=_positive_int("VOICE_AGENT_MINTS_PER_IP"),
         max_stored=_positive_int("VOICE_AGENT_MAX_STORED"),
         admin_key=_admin_key(os.environ.get("VOICE_AGENT_ADMIN_KEY", "")),
+        eyes_interval=_positive_float("VOICE_AGENT_EYES_INTERVAL") or 1.0,
+        eyes_threshold=_positive_float("VOICE_AGENT_EYES_THRESHOLD") or 0.01,
+        eyes_max_frames=_eyes_max_frames(),
     )
+
+
+def _eyes_max_frames() -> int | None:
+    """600 unless set; `off` for no cap."""
+    raw = os.environ.get("VOICE_AGENT_EYES_MAX_FRAMES", "").strip()
+    return 600 if raw == "" else _positive_int("VOICE_AGENT_EYES_MAX_FRAMES")
 
 
 def _optional_float(raw: str | None) -> float | None:

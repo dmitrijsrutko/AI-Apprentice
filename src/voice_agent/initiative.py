@@ -16,7 +16,7 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-from voice_agent import timing, trace
+from voice_agent import prompts, timing, trace
 from voice_agent.conversation import Conversation, Message
 from voice_agent.decline import DECLINE, is_decline
 from voice_agent.errors import SilentReplyError, VoiceAgentError
@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 1.0
 """How often the ladder is checked."""
+
+SCREEN_QUIET_SECONDS = 2.0
+"""How long the user must have been quiet before what the eyes saw may be
+spoken about: past a breath, short of a silence the ladder would fill."""
+
+SCREEN_GAP_SECONDS = 15.0
+"""At most one screen-prompted consideration this often, whatever the screen
+does: the brief's budget is three to five live questions in ten minutes."""
 
 MAX_LINE_CHARS = 300
 """Longer than this and an unprompted line is treated as malformed, not spoken:
@@ -116,6 +124,15 @@ def nudge_prompt(rung: Rung, quiet: float) -> str:
     )
 
 
+def screen_nudge(seen: str, quiet: float) -> str:
+    """The message that asks whether what the eyes just saw is worth a word.
+    Used for one call and never recorded, like `nudge_prompt`."""
+    return (
+        prompts.load("eyes_nudge").replace("{seen}", seen).replace("{quiet}", f"{quiet:.0f}")
+        + f"\n\nReply with that line alone, or to stay quiet reply with exactly: {DECLINE}"
+    )
+
+
 def spoken_line(reply: str) -> str | None:
     """The line to say, or `None` if the model declined (see `decline.py`)."""
     line = reply.strip().strip("\"'").strip()
@@ -152,6 +169,10 @@ class Initiative:
         self._tick = tick
         self._rung = 0
         self._task: asyncio.Task[None] | None = None
+        self._news: str | None = None
+        """What the eyes saw that has not been considered yet."""
+        self._screen_at: float | None = None
+        """When a screen-prompted consideration last ran."""
 
     def start(self) -> None:
         if self._task is None and self._ladder:
@@ -169,6 +190,18 @@ class Initiative:
         """The user said something, so the budget is theirs again."""
         self._rung = 0
 
+    def notice(self, seen: str | None) -> None:
+        """The eyes saw something change. Considered at the next tick that
+        finds the user quiet; a newer change replaces an unconsidered one.
+        `None` drops it: sharing stopped.
+
+        The silence ladder stands down until the user next speaks: someone
+        working on a shared screen is not leaving a silence to fill, and
+        "I'll be quiet now" in the middle of their task is exactly wrong."""
+        self._news = seen
+        if seen is not None:
+            self._rung = len(self._ladder)
+
     async def _run(self) -> None:
         while True:
             await asyncio.sleep(self._tick)
@@ -182,6 +215,8 @@ class Initiative:
 
     async def tick(self) -> None:
         """One check of the ladder. Public so tests drive it without sleeping."""
+        if self._news is not None and await self._screen():
+            return
         if self._rung >= len(self._ladder):
             return  # budget spent; silent until the user speaks
         quiet = self._quiet()
@@ -194,11 +229,28 @@ class Initiative:
         index, self._rung = self._rung, self._rung + 1
         await self._consider(index, rung, quiet)
 
-    async def _consider(self, index: int, rung: Rung, quiet: float) -> None:
+    async def _screen(self) -> bool:
+        """Consider what the eyes saw, if the moment allows. Whether it did."""
+        quiet = self._quiet()
+        if quiet is None or quiet < SCREEN_QUIET_SECONDS:
+            return False
+        now = timing.now()
+        if self._screen_at is not None and now - self._screen_at < SCREEN_GAP_SECONDS:
+            return False
+        seen, self._news = self._news or "", None
+        self._screen_at = now
+        await self._consider(-1, None, quiet, nudge=screen_nudge(seen, quiet), seen=seen)
+        return True
+
+    async def _consider(
+        self, index: int, rung: Rung | None, quiet: float, nudge: str = "", seen: str = ""
+    ) -> None:
+        """`rung` is `None` for what the eyes saw, with its own `nudge`."""
         started = timing.now()
         # A call on a timer is a spend decision, so its cost is reported too.
         usage = Usage()
-        nudge = nudge_prompt(rung, quiet)
+        if rung is not None:
+            nudge = nudge_prompt(rung, quiet)
         try:
             with trace.span(
                 "initiative.consider",
@@ -211,13 +263,13 @@ class Initiative:
             # the model thought and sent nothing. Its own name, so the page
             # calls it neither.
             logger.info("the model thought and sent nothing: %s", exc)
-            await self._note(index, quiet, "silent", started, usage)
+            await self._note(index, quiet, "silent", started, usage, seen=seen)
             return
         except VoiceAgentError as exc:
             # Reported: a clock failing silently looks like one choosing silence.
             # The rung stays spent, so an outage is not a retry loop.
             logger.warning("could not decide whether to speak: %s", exc)
-            await self._note(index, quiet, "failed", started, usage, message=str(exc))
+            await self._note(index, quiet, "failed", started, usage, message=str(exc), seen=seen)
             return
 
         line = spoken_line(reply)
@@ -229,7 +281,7 @@ class Initiative:
             decision, line = "yielded", None
         else:
             decision = "spoke"
-        await self._note(index, quiet, decision, started, usage, line=line or "")
+        await self._note(index, quiet, decision, started, usage, line=line or "", seen=seen)
         # `Session.speak` re-checks the moment itself.
         if line is not None:
             await self._speak(line, index + 1)
@@ -243,11 +295,14 @@ class Initiative:
         usage: Usage,
         line: str = "",
         message: str = "",
+        seen: str = "",
     ) -> None:
         """One consideration, drawn on the page whatever it decided."""
+        extra: dict[str, object] = {"trigger": "screen", "seen": seen} if index < 0 else {}
         await self._report(
             {
                 "type": "initiative",
+                **extra,
                 "rung": index + 1,
                 "rungs": len(self._ladder),
                 "quiet_ms": round(quiet * 1000),

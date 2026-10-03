@@ -14,11 +14,40 @@ from voice_agent.timeline import Timeline
 
 Role = Literal["user", "assistant"]
 
+SCREEN_NOTES = 40
+"""How many of the latest screen notes every call carries. Thirty minutes of
+sharing is hundreds of them, resent on every turn; older ones are counted, not
+repeated. The whole log stays in `Conversation.seen`."""
+
 
 @dataclass(frozen=True, slots=True)
 class Message:
     role: Role
     content: str
+
+
+@dataclass(slots=True)
+class Glimpse:
+    """One thing the eyes saw, kept in the conversation's order: after `after`,
+    the message that was last when it was seen (`None`: before any)."""
+
+    after: Message | None
+    clock: str
+    """When, as m:ss since the eyes opened, for the note the model reads."""
+    app: str
+    events: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class Screen:
+    """Whether the user is sharing a screen right now, and what it shows."""
+
+    sharing: bool = False
+    surface: str = ""
+    """What was shared, as the page names it: a tab, a window, a screen."""
+    since: str = ""
+    now: str = ""
+    """The latest description of what is on it."""
 
 
 @dataclass(slots=True)
@@ -67,6 +96,12 @@ class Conversation:
     collected mid-call."""
     verdict: dict[str, Any] | None = None
     """The judge's ruling, once there is one; a reload shows it again."""
+    eyes: str | None = None
+    """Which eyes (`llm/vision.MENU`) this conversation sees with, pinned like the
+    engine; `None` when it has none, and then no screen note reaches the model."""
+    screen: Screen = field(default_factory=Screen)
+    seen: list[Glimpse] = field(default_factory=list)
+    """What the eyes saw, in order: what `context` interleaves with the messages."""
     frames: list[dict[str, Any]] = field(default_factory=list)
     """What was sent to the page, in order (`channel.shown`), plus typed turns
     — kept even once the socket has gone, like the history: a reload redraws
@@ -74,8 +109,46 @@ class Conversation:
 
     @property
     def context(self) -> list[Message]:
-        """What the reasoning engine reads: every message but the greeting."""
-        return [m for m in self.messages if m is not self.opening]
+        """What the reasoning engine reads: every message but the greeting.
+
+        With eyes, also what they saw, as bracketed notes where it happened, and
+        before the latest user turn whether it can see at all. Built here, at
+        call time, so the history itself — the page's replay, the record, the
+        judge — holds only what was said."""
+        if self.eyes is None:
+            return [m for m in self.messages if m is not self.opening]
+        notes: dict[int, list[Message]] = {}
+        kept = self.seen[-SCREEN_NOTES:]
+        earlier = len(self.seen) - len(kept)
+        for glimpse in kept:
+            anchor = id(glimpse.after) if glimpse.after is not None else 0
+            if earlier:
+                summary = f"[screen: {earlier} earlier changes not shown]"
+                notes.setdefault(anchor, []).append(Message("user", summary))
+                earlier = 0
+            notes.setdefault(anchor, []).append(Message("user", seen_note(glimpse)))
+        known = {id(m) for m in self.messages}
+        context: list[Message] = [
+            note for anchor, held in notes.items() if anchor not in known for note in held
+        ]
+        for message in self.messages:
+            if message is not self.opening:
+                context.append(message)
+            context.extend(notes.get(id(message), ()))
+        status = Message("user", eyes_status(self.screen))
+        last_user = max(
+            (
+                i
+                for i, m in enumerate(context)
+                if m.role == "user" and not m.content.startswith("[")
+            ),
+            default=None,
+        )
+        if last_user is not None and last_user == len(context) - 1:
+            context.insert(last_user, status)
+        else:
+            context.append(status)
+        return context
 
     def add_user(self, content: str) -> Message:
         return self._add("user", content)
@@ -102,9 +175,29 @@ class Conversation:
                     del self.messages[index]
                 else:
                     self.messages[index] = replacement
+                # What the eyes saw after it stays where it was seen.
+                anchor = replacement or (self.messages[index - 1] if index else None)
+                for glimpse in self.seen:
+                    if glimpse.after is existing:
+                        glimpse.after = anchor
                 if existing is self.opening:
                     self.opening = replacement
                 return
 
     def end(self) -> None:
         self.ended = True
+
+
+def seen_note(glimpse: Glimpse) -> str:
+    """What the eyes saw, as the model reads it: in brackets, so it is never
+    taken for the user speaking (see the system prompt's "Your eyes")."""
+    where = f" {glimpse.app}" if glimpse.app else ""
+    return f"[screen {glimpse.clock}{where}: {'; '.join(glimpse.events)}]"
+
+
+def eyes_status(screen: Screen) -> str:
+    """Whether it can see, right before the turn it is about to answer."""
+    if not screen.sharing:
+        return "[eyes: not sharing — you cannot see their screen right now]"
+    now = f" · on screen now: {screen.now}" if screen.now else " · nothing seen yet"
+    return f"[eyes: sharing {screen.surface or 'a screen'} since {screen.since}{now}]"

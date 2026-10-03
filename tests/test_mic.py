@@ -591,3 +591,26 @@ async def test_a_stopped_mic_hears_nobody_speaking_and_nothing_in_progress() -> 
 
     assert not mic.speaking
     assert mic.partial == ""
+
+
+def test_listening_lasts_as_long_as_the_public_conversation() -> None:
+    """The 6-minute cap outlived a budget raised to 30: listening stopped
+    mid-conversation for every role."""
+    import tomllib
+
+    fly = tomllib.loads(Path("fly.toml").read_text(encoding="utf-8"))
+    budget = float(fly["env"]["VOICE_AGENT_SESSION_BUDGET"])
+
+    assert budget <= mic_module.SESSION_CAP_SECONDS
+
+
+async def test_working_on_a_shared_screen_keeps_listening_open() -> None:
+    channel = RecordingChannel()
+    mic = await running_mic(channel, idle_timeout=0.15, session_cap=60.0)
+
+    for _ in range(5):  # 0.4 s of silent work, well past the idle window
+        await asyncio.sleep(0.08)
+        mic.active()
+    assert mic.listening is True, "stopped while the screen was still changing"
+
+    await channel.wait_for(type="listening", active=False)  # and once it stops changing

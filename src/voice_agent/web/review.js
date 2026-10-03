@@ -5,15 +5,15 @@
 // `app.js` draws the entries.
 
 import {
-  audioLine, committedLine, echoLine, initiativeLine, quietLine, replyLines, thoughtLine,
-  truncatedLine, unpromptedLine,
+  audioLine, committedLine, echoLine, eyesLine, initiativeLine, quietLine, replyLines, seenLine,
+  thoughtLine, truncatedLine, unpromptedLine,
 } from "./telemetry.js";
 
 // The lines under a finished reply. Shared with the live handler, so the two
 // cannot drift. `cut`: the user talked over it, and its truncation says so.
 export function endLines(msg, cut) {
   if (msg.interrupted) return cut ? [] : ["✋ interrupted before it was spoken"];
-  if (msg.initiative) return [unpromptedLine(msg)];
+  if (msg.initiative != null) return [unpromptedLine(msg)];
   if (msg.resumed) return ["↩ picked up where it was cut off: whatever cut in said nothing more"];
   return replyLines(msg);
 }
@@ -79,6 +79,14 @@ export function review(frames) {
         break;
       case "initiative":
         line(initiativeLine(msg), "note think thought");
+        break;
+      case "seen": {
+        const entry = line(seenLine(msg), "note seen");
+        if (msg.screen) entry.screen = msg.screen;
+        break;
+      }
+      case "eyes":
+        line(eyesLine(msg), "note seen");
         break;
       case "echo_ignored":
         line(echoLine(msg), "note think telemetry");

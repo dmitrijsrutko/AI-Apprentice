@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from voice_agent import prompts, timing, trace
-from voice_agent.conversation import Conversation, Message
+from voice_agent.conversation import Conversation, Message, eyes_status, seen_note
 from voice_agent.errors import VoiceAgentError
 from voice_agent.llm import LLM
 from voice_agent.llm.base import Usage
@@ -47,6 +47,9 @@ runaway, where it is the cost control."""
 MAX_NOTES_WORDS = 60
 """Notes are fed back every call; a model that lets them grow would grow the
 bill with them. The prompt asks for 40; this is the hard stop."""
+
+SCREEN_LINES = 6
+"""How many of the latest screen notes the thinker reads, after the script."""
 
 RECENT_MESSAGES = 12
 """How much of the conversation the thinker reads verbatim: the last six
@@ -131,6 +134,10 @@ def transcript(conversation: Conversation) -> str:
     ]
     if len(messages) > RECENT_MESSAGES:
         lines.insert(0, f"({len(messages) - RECENT_MESSAGES} earlier lines: see your notes)")
+    if conversation.eyes is not None:
+        # What the partner saw on the shared screen lately, and whether it can see.
+        lines += [seen_note(glimpse) for glimpse in conversation.seen[-SCREEN_LINES:]]
+        lines.append(eyes_status(conversation.screen))
     return "\n".join(lines) if lines else "(nothing yet)"
 
 

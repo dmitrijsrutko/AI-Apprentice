@@ -25,6 +25,7 @@ previous one. [CHANGELOG.md](CHANGELOG.md) has the reasoning.
 
 - **0 — The empty page, again.** A new project with a fresh history, standing on an inherited voice pipeline. The brief is added as context, and the working contract ([AGENTS.md](AGENTS.md)) is kept.
 - **1 — The apprentice, by ear.** A new default role, **AI apprentice**: the expert talks it through a task; it asks why, finds the limits and exceptions, and explains the process back until they confirm. There are no eyes yet. The default model is DeepSeek V4.1 Flash, smartest.
+- **2 — Eyes.** Share a screen, window or tab at any time (🖥 share). Changed frames are read by Claude (Haiku 4.5 or Sonnet 5.5, about 2.5 s each, one at a time, the newest waiting), and what it sees joins the conversation. The apprentice knows whether it can see, may ask about what you just did at a short pause, and the **eyes** toggle shows every reading. Frames are never stored.
 
 ### The inherited foundation
 
@@ -71,6 +72,10 @@ docs/vendor/              vendor references: AssemblyAI, ElevenLabs
 prompts/                  system prompt, rules, role cards, inner voice, judge
 src/voice_agent/          the inherited pipeline: server, session, turn-taking,
                           llm/ stt/ tts/ adapters, web/ (the browser page)
+  eyes.py                 the shared screen: one frame read at a time, the newest waiting
+  llm/vision.py           Claude reads a frame: what is on screen, what changed
+  web/eyes.js             the screen picker and which frames are worth sending
+prompts/vision.md, eyes_nudge.md  what the eyes report; when what they saw is worth a word
 tests/                    pytest; tests/web/ node tests; tests/tapes/ replayed conversations
 scripts/                  operational helpers
 ```

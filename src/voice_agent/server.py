@@ -18,6 +18,8 @@ considers whether a silence is worth speaking into, and usually decides not.
 """
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import logging
@@ -43,11 +45,13 @@ from voice_agent.config import DEFAULT_GREETING, Settings, build_prompt, load_se
 from voice_agent.conversation import Conversation, Message
 from voice_agent.errors import ConfigError, SessionNotFoundError, VoiceAgentError
 from voice_agent.events import Playback, Typed
+from voice_agent.eyes import Eyes
 from voice_agent.greeting import greet
 from voice_agent.initiative import LADDER, Rung
 from voice_agent.limits import Live, MintLimit, budget_reason, client_address
 from voice_agent.llm import LLM, create_llm
 from voice_agent.llm.traced import Traced
+from voice_agent.llm.vision import Vision
 from voice_agent.record import Record
 from voice_agent.session import Session
 from voice_agent.sessions import SessionStore
@@ -296,6 +300,15 @@ class Agent:
             # one means the page must say it is being written down.
             "recording": self.record_dir is not None or trace.current() is not None,
             "choices": self.backends.choices(engine, ears, role, voice),
+            # How the page samples a shared screen; absent without eyes.
+            "eyes": (
+                {
+                    "interval": self.settings.eyes_interval,
+                    "threshold": self.settings.eyes_threshold,
+                }
+                if self.backends.eyes
+                else None
+            ),
         }
 
 
@@ -314,6 +327,8 @@ def create_app(
     role: str | None = None,
     thinker: LLM | None = None,
     judge: LLM | None = None,
+    vision: Vision | None = None,
+    eyes: bool = True,
 ) -> FastAPI:
     """The app. The keyword arguments are test seams: `llm`/`stt`/`tts` inject
     fakes, `voice=False`/`ears=False` run silent or deaf (as `…_TTS=none` and
@@ -340,6 +355,8 @@ def create_app(
         voice=settings.voice,
         speaker=tts,
         judge=judge,
+        vision=vision,
+        sees=eyes,
     )
     # The default voice is built now: a missing synthesis key stops the server
     # here, as it did before voices were a choice, not every page load after.
@@ -531,6 +548,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
     if judge_name is not None and conversation.timeline is None:
         conversation.timeline = Timeline()
     channel = Channel(websocket, recording, conversation.timeline, conversation.frames)
+    eyes_name = agent.backends.eyes_for(conversation, websocket.query_params)
     session = Session(
         channel,
         conversation,
@@ -543,6 +561,17 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
         thinker=agent.thinker if role is not None else None,
         thinker_prompt=agent.thinker_prompts.get(role_name),
     )
+    eyes = (
+        Eyes(
+            agent.backends.vision(eyes_name),
+            conversation,
+            channel.send_json,
+            session.noticed,
+            max_frames=agent.settings.eyes_max_frames,
+        )
+        if eyes_name is not None
+        else None
+    )
     budget_seconds = round_budget(agent.settings.session_budget, role)
     left = time_left(budget_seconds, conversation)
     await channel.send_json(
@@ -554,6 +583,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             # The menu option, so the record says which of the six ran: three
             # DeepSeek tiers share a provider and a model.
             "choice": engine_name,
+            "eyes_model": agent.backends.vision(eyes_name).model if eyes_name else None,
             **agent.facts(listener, speaker, engine_name, ears_name, role_name, voice_name),
             # What is left of it: the page counts down from here.
             "budget_seconds": left,
@@ -604,7 +634,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
                 if session.mic is not None:
                     session.mic.feed(frame)
             elif (raw := message.get("text")) is not None:
-                await handle_text(channel, session, raw, recording)
+                await handle_text(channel, session, raw, recording, eyes)
     except WebSocketDisconnect as exc:
         why = f"page disconnected (code {exc.code})"
         return
@@ -619,6 +649,11 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             with contextlib.suppress(asyncio.CancelledError):
                 await budget
         closing = timing.now()
+        if eyes is not None:
+            await eyes.close()
+            # Sharing ends with the socket: a reload starts unshared, and the
+            # page asks for the screen again.
+            conversation.screen.sharing = False
         await session.close()
         if (teardown := timing.now() - closing) > SLOW_TEARDOWN_SECONDS:
             logger.warning("conversation %s: teardown took %.1f s", conversation.id, teardown)
@@ -668,8 +703,17 @@ def client_note(kind: str, payload: dict[str, object]) -> str:
     return f"client error: {field('what')} · {field('name')} · {field('message', 160)}"
 
 
+MAX_FRAME_CHARS = 2_000_000
+"""A shared screen's frame, as base64: a 1280-wide JPEG at quality 0.7 is
+60-300 KB, so this refuses only what is not a frame from our page."""
+
+
 async def handle_text(
-    channel: Channel, session: Session, raw: str, record: Record | None = None
+    channel: Channel,
+    session: Session,
+    raw: str,
+    record: Record | None = None,
+    eyes: Eyes | None = None,
 ) -> None:
     try:
         payload = json.loads(raw)
@@ -699,6 +743,28 @@ async def handle_text(
             logger.info("playback stuttered: %d gaps, %d ms of silence", gaps, gap_ms)
             if record is not None:
                 record.note(f"playback: gaps {gaps} · gap_ms {gap_ms}")
+        return
+
+    if kind == "share":
+        # Sharing started, switched or stopped — by the page's button or the
+        # browser's own "stop sharing" bar.
+        if eyes is not None:
+            await eyes.share(
+                payload.get("active") is True,
+                CLIENT_WORD.sub("", str(payload.get("surface", "")))[:20],
+                CLIENT_WORD.sub("", str(payload.get("label", ""))),
+            )
+        return
+
+    if kind == "frame":
+        data = payload.get("jpeg")
+        if eyes is None or not isinstance(data, str) or len(data) > MAX_FRAME_CHARS:
+            return
+        try:
+            jpeg = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            return
+        eyes.frame(jpeg)
         return
 
     if kind in ("client", "client_error"):

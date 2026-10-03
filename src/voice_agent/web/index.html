@@ -60,6 +60,17 @@
   .tag { display: block; font-size: 11px; opacity: .5; margin-top: 4px; }
   body:not(.stats) .telemetry { display: none; }
   body:not(.thoughts) .thought { display: none; }
+  body:not(.eyes) .seen { display: none; }
+  /* What the eyes saw: one line per changed frame, the whole screen on a click. */
+  .seen { align-self: stretch; font-size: 12px; color: var(--muted); max-width: 100%; }
+  .seen summary { cursor: pointer; list-style: none; text-align: center; }
+  .seen summary::-webkit-details-marker { display: none; }
+  .seen[open] summary { color: var(--fg); }
+  .seen .screen {
+    margin: 6px auto 2px; max-width: 34em; padding: 8px 10px; text-align: left;
+    border: 1px solid var(--line); border-radius: 8px; white-space: pre-wrap;
+  }
+  .chip.sharing { background: #2e7d4f; color: #fff; border-color: #2e7d4f; }
   /* Who holds the floor, by the server's VAD: the last 12 s, newest on the right. */
   #floor { position: relative; height: 14px; border-bottom: 1px solid var(--line); overflow: hidden; }
   #floor span {
@@ -175,9 +186,11 @@
     <span id="timer" class="timer" hidden></span>
     <span style="margin-left:auto;"></span>
     <button type="button" id="listen" class="chip" disabled>🎤 listen</button>
+    <button type="button" id="share" class="chip" hidden title="Share a screen, window or tab with the apprentice">🖥 share</button>
     <button type="button" id="end" class="chip" disabled title="End this conversation">⏹ End</button>
     <label style="cursor:pointer;" title="Timings, tokens and the floor strip"><input type="checkbox" id="stats"> stats</label>
     <label style="cursor:pointer;" title="What the agent considered saying"><input type="checkbox" id="thoughts"> thoughts</label>
+    <label style="cursor:pointer;" title="What the eyes saw on your shared screen"><input type="checkbox" id="eyes"> eyes</label>
     <label style="cursor:pointer;"><input type="checkbox" id="mute"> mute</label>
   </header>
 

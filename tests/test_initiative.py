@@ -422,3 +422,59 @@ def test_the_shipped_ladder_starts_where_the_default_says_it_does() -> None:
     assert len(delays) == len(SHIPPED) == 3
     assert delays[0] == 5.0
     assert [rung.after for rung in SHIPPED] == list(delays)
+
+
+async def test_what_the_eyes_saw_is_considered_at_a_short_pause() -> None:
+    llm = FakeLLM(["You went for direct only — why?"])
+    initiative, clock = clock_for(llm, quiet=2.5)
+
+    initiative.notice("filter 'Direct' applied")
+    await initiative.tick()
+
+    assert clock.spoken == [("You went for direct only — why?", 0)]
+    [report] = clock.reports
+    assert report["trigger"] == "screen" and report["seen"] == "filter 'Direct' applied"
+    assert "filter 'Direct' applied" in llm.seen[0][-1].content
+
+
+async def test_what_the_eyes_saw_waits_while_the_user_is_talking_or_just_spoke() -> None:
+    llm = FakeLLM(["Got it."])
+    initiative, clock = clock_for(llm, quiet=None)
+    initiative.notice("opened SAS 14:20")
+
+    await initiative.tick()  # talking: not now
+    clock.quiet = 1.0
+    await initiative.tick()  # a breath: not yet
+
+    assert clock.reports == []
+    clock.quiet = 2.0
+    await initiative.tick()
+    assert clock.decisions() == ["spoke"]
+
+
+async def test_the_screen_speaks_at_most_once_in_a_while() -> None:
+    llm = FakeLLM(["One.", "Two."])
+    initiative, clock = clock_for(llm, quiet=3.0)
+
+    initiative.notice("first change")
+    await initiative.tick()
+    initiative.notice("second change")
+    await initiative.tick()
+
+    assert [line for line, _ in clock.spoken] == ["One."]
+
+
+async def test_screen_activity_stands_the_silence_ladder_down() -> None:
+    """Someone working on a shared screen is not leaving a silence to fill."""
+    llm = FakeLLM([DECLINE])
+    initiative, clock = clock_for(llm, quiet=30.0)
+
+    initiative.notice("scrolled results")
+    await initiative.tick()  # the screen, declined
+    await initiative.tick()  # the ladder: stood down
+    await initiative.tick()
+
+    assert len(clock.reports) == 1 and clock.reports[0]["trigger"] == "screen"
+    initiative.reset()  # the user spoke: the ladder is theirs again
+    await initiative.tick()
+    assert len(clock.reports) == 2 and "trigger" not in clock.reports[1]
