@@ -13,6 +13,7 @@ Two rules:
 import asyncio
 import contextlib
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
@@ -37,6 +38,16 @@ spoken about: past a breath, short of a silence the ladder would fill."""
 SCREEN_GAP_SECONDS = 15.0
 """At most one screen-prompted consideration this often, whatever the screen
 does: the brief's budget is three to five live questions in ten minutes."""
+
+TEACH_QUIET_SECONDS = 0.0
+TEACH_GAP_SECONDS = 4.0
+"""While tutoring, a change is considered at once and as often as every 4 s:
+a guardrail about to be broken cannot wait for the pause a question can. It
+still never speaks over the user's voice (`quiet` is `None` then)."""
+
+STEP_MARK = re.compile(r"^\s*\[step\s*(\d{1,2})\]\s*", re.IGNORECASE)
+"""How a tutor's line names the map step it is about: taken off before it is
+spoken, and the page opens that step with the expert's screenshot."""
 
 MAX_LINE_CHARS = 300
 """Longer than this and an unprompted line is treated as malformed, not spoken:
@@ -124,13 +135,23 @@ def nudge_prompt(rung: Rung, quiet: float) -> str:
     )
 
 
-def screen_nudge(seen: str, quiet: float) -> str:
-    """The message that asks whether what the eyes just saw is worth a word.
-    Used for one call and never recorded, like `nudge_prompt`."""
+def screen_nudge(seen: str, quiet: float, teaching: bool = False) -> str:
+    """The message that asks whether what the eyes just saw is worth a word —
+    as the apprentice, or as the tutor checking it against the map. Used for
+    one call and never recorded, like `nudge_prompt`."""
+    name = "tutor_nudge" if teaching else "eyes_nudge"
     return (
-        prompts.load("eyes_nudge").replace("{seen}", seen).replace("{quiet}", f"{quiet:.0f}")
+        prompts.load(name).replace("{seen}", seen).replace("{quiet}", f"{quiet:.0f}")
         + f"\n\nReply with that line alone, or to stay quiet reply with exactly: {DECLINE}"
     )
+
+
+def marked_step(line: str) -> tuple[int | None, str]:
+    """A tutor's line without its `[step N]` marker, and the step it named."""
+    match = STEP_MARK.match(line)
+    if match is None:
+        return None, line
+    return int(match.group(1)), line[match.end() :].strip()
 
 
 def spoken_line(reply: str) -> str | None:
@@ -177,6 +198,9 @@ class Initiative:
         """Counts what the eyes noticed: a screen decision overtaken by a newer
         change is not spoken."""
         self._superseded = False
+        self.teaching = False
+        """Tutoring a new hire: what the eyes see is checked against the Work
+        Map at once (`TEACH_*`), and a breach is said even mid-task."""
         """The last screen decision was overtaken. Once, not twice running: a
         screen that never stops changing (a ticking timer) would otherwise buy
         a decision every couple of seconds and never say a word."""
@@ -192,6 +216,12 @@ class Initiative:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+    def become(self, system_prompt: str) -> None:
+        """Decide from here on as the tutor (`Session.become`)."""
+        self._system_prompt = system_prompt
+        self.teaching = True
+        self._screen_at = None
 
     def reset(self) -> None:
         """The user said something, so the budget is theirs again."""
@@ -240,14 +270,17 @@ class Initiative:
     async def _screen(self) -> bool:
         """Consider what the eyes saw, if the moment allows. Whether it did."""
         quiet = self._quiet()
-        if quiet is None or quiet < SCREEN_QUIET_SECONDS:
+        least = TEACH_QUIET_SECONDS if self.teaching else SCREEN_QUIET_SECONDS
+        gap = TEACH_GAP_SECONDS if self.teaching else SCREEN_GAP_SECONDS
+        if quiet is None or quiet < least:
             return False
         now = timing.now()
-        if self._screen_at is not None and now - self._screen_at < SCREEN_GAP_SECONDS:
+        if self._screen_at is not None and now - self._screen_at < gap:
             return False
         seen, self._news = self._news or "", None
         self._screen_at = now
-        await self._consider(-1, None, quiet, nudge=screen_nudge(seen, quiet), seen=seen)
+        nudge = screen_nudge(seen, quiet, self.teaching)
+        await self._consider(-1, None, quiet, nudge=nudge, seen=seen)
         return True
 
     async def _consider(
@@ -282,6 +315,10 @@ class Initiative:
             return
 
         line = spoken_line(reply)
+        step = None
+        if line is not None:
+            step, line = marked_step(line)
+            line = line or None
         overtaken = rung is None and self._seen_version != version
         if overtaken and not self._superseded:
             # The screen changed while it decided: what it would say is about a
@@ -301,6 +338,8 @@ class Initiative:
             self._superseded = False
         await self._note(index, quiet, decision, started, usage, line=line or "", seen=seen)
         # `Session.speak` re-checks the moment itself.
+        if line is not None and step is not None:
+            await self._report({"type": "map_focus", "n": step})
         if line is not None:
             await self._speak(line, index + 1)
 

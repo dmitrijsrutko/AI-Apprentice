@@ -15,6 +15,89 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 5 — Teach: the apprentice becomes the tutor
+
+Module 3 of the brief. Once the map is final, **Start teaching** hands the
+same conversation to a new part. The apprentice becomes the tutor: "I'm your
+tutor now. Start a new case…". The screen is watched again, and the case may
+change (another route, other dates) while the expert's rules hold. The tutor
+mostly watches, asks the new hire to predict at the map's judgment calls, and
+steps in **at once** when what it sees breaks one of the expert's guardrails.
+It names the stop, asks why, opens that step of the map with the expert's own
+screenshot, and teaches in the expert's words. **Finish teaching** writes a
+report: what was mastered, what the tutor caught (with the expert's quote),
+and what to practise. It is shown as a card and said aloud.
+
+**What changed**
+- `prompts/tutor.md` (new): the tutor's part. Predict, then explain; a breach
+  before anything else; one hint, then the answer; the expert's words,
+  attributed.
+- `session.py`: `become(prompt)` swaps the system prompt for every call the
+  conversation makes (turns, guesses, the clock) and stops the inner voice,
+  which thinks as the apprentice.
+- `initiative.py` and `prompts/tutor_nudge.md` (new): while teaching, a screen
+  change is considered at once (no pause needed) and as often as every 4 s,
+  against the Work Map. A breach line begins `[step N]`; the marker is taken
+  off before speaking and opens that step on the page (`map_focus`).
+- `teach.py` (new) and `prompts/teach_report.md` (new): `Tutor` starts and
+  finishes teaching. `assess` reads the map and only the teaching part of the
+  script (`workmap.script(…, messages_from, seen_from)`).
+- The eyes see in `capture` and `teach` only. The flow bar runs Start teaching
+  ▸ Finish teaching ▸ Writing your report… ▸ ✓ Done. The mastery card is in
+  `web/workmap.js`. A reload redraws the map and the report, and a reconnect
+  mid-teaching is still the tutor.
+
+**Design decisions**
+- **One conversation, another part — not a second agent.** The tutor needs
+  everything the apprentice heard and saw, and the map in its context; a
+  swapped role section in the same system prompt carries all of it.
+- **A breach overrides the pause rule; nothing else does.** Coaching waits
+  for natural pauses. A guardrail about to be broken cannot: the brief's bar
+  is catching it before it is saved. It still never talks over the user's
+  voice.
+- **The step marker is the model's to choose, the screenshot is code's to
+  show.** The tutor names the step; the page opens the expert's moment, with
+  no second model call.
+
+**Latency impact** — none on replies. Measured on the recorded Skyscanner
+session, with a new case (Tallinn to Berlin) and a planted breach ("2 stops,
+31 h 10 m"):
+- the tutor decided in **1.2 s**, opened **step 6, "Cap the total duration at
+  24 hours"**, and said: "Stop there — that fare is thirty-one hours. What did
+  the expert say the maximum total duration was, and why?";
+- the report took **5.8 s** (DeepSeek high). It listed the 31 h fare under
+  *caught*, with the expert's words "The max time I can afford is 24 hours
+  max.";
+- the map for that run took 11.5 s.
+
+A live breach is caught about one vision reading (~3 s) plus ~1–2 s after it
+appears on screen.
+
+**Deliberately not done** — blocking the click on the real site (a mock page
+could); a second voice for the tutor; comparing two experts; agent-ready
+export. The tutor only steps in unprompted while the microphone is listening,
+like every unprompted line; typed-only, it answers but never interrupts.
+
+**Verification** — `uv run verify` (968 passed, plus node). Real model calls
+as above. The whole flow runs over the socket with fakes: capture, map,
+final, teach (handover spoken), finish, report, then a reconnect showing it
+again. The page's teaching controls are not yet exercised in a real browser.
+
+**Fixes**
+- The tutor's context did not mark where teaching began, so the expert's
+  screen notes and the new hire's ran together, and the tutor could credit or
+  blame one for the other. A `[teaching starts here …]` note now divides them.
+  A new hire's first screen changes, made before the handover is spoken,
+  still fall on their side.
+- A clicked step during teaching said "In your words" to the new hire. It now
+  says "The expert said".
+- Listening stopped after 30 s without speech, which came unexpectedly live:
+  reading a results page in silence is ordinary screen work. It is now 60 s.
+  The silence ladder still ends inside it (28 s), and keepalives every 10 s
+  hold the recognizer's session open. The `listening_expiry` tape now runs to
+  75 s, and its golden moved from "no speech for 30s" at 31.2 s to "no speech
+  for 1 minute" at 61.2 s.
+
 ## Chapter 4 — The Work Map: capture becomes a map you can click, hear and correct
 
 Module 2 of the brief. The apprentice's page now runs a flow, **① Capture ▸

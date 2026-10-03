@@ -38,7 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
 
-from voice_agent import admin, judge, roles, timing, trace, vad
+from voice_agent import admin, judge, prompts, roles, timing, trace, vad
 from voice_agent.backends import Backends
 from voice_agent.channel import Channel, page_event
 from voice_agent.config import DEFAULT_GREETING, Settings, build_prompt, load_settings
@@ -57,6 +57,7 @@ from voice_agent.session import Session
 from voice_agent.sessions import SessionStore
 from voice_agent.stt import STT
 from voice_agent.stt.registry import NO_EARS
+from voice_agent.teach import Tutor
 from voice_agent.thinker import THINKER_MODEL, system_prompt
 from voice_agent.timeline import Timeline
 from voice_agent.tts import TTS
@@ -605,6 +606,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
         else None
     )
     mapper: Mapper | None = None
+    tutor: Tutor | None = None
     if mapper_name is not None:
 
         async def announce(line: str, interrupt: bool = False) -> None:
@@ -621,6 +623,31 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             guard=agent.rulings,
         )
         session.turned = mapper.corrected
+        # The same conversation, another part: the tutor's role section in
+        # place of the apprentice's, everything else in the prompt unchanged.
+        tutor_prompt = build_prompt(
+            listener.languages if listener else (),
+            agent.settings.voice_gender,
+            tuple(rung.after for rung in agent.ladder),
+            greeting=opening,
+            role=prompts.load("tutor"),
+        )
+
+        async def become() -> None:
+            await session.become(tutor_prompt)
+
+        tutor = Tutor(
+            conversation,
+            creator=lambda: agent.backends.judge(chosen),
+            title=judge.BY_NAME[chosen].title,
+            report=channel.send_json,
+            announce=announce,
+            become=become,
+            written=recording.mastery if recording is not None else lambda _: None,
+            guard=agent.rulings,
+        )
+        if conversation.phase in ("teach", "assessing", "taught"):
+            await become()  # a reconnect mid-teaching keeps teaching
     budget_seconds = round_budget(agent.settings.session_budget, role)
     left = time_left(budget_seconds, conversation)
     await channel.send_json(
@@ -644,6 +671,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             "phase": conversation.phase,
             "work_map": conversation.work_map,
             "map_version": conversation.map_version,
+            "mastery": conversation.mastery,
             "history": serialize(conversation.messages),
             "frames": list(conversation.frames),
             "ended": conversation.ended,
@@ -689,7 +717,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
                 if session.mic is not None:
                     session.mic.feed(frame)
             elif (raw := message.get("text")) is not None:
-                await handle_text(channel, session, raw, recording, eyes, mapper)
+                await handle_text(channel, session, raw, recording, eyes, mapper, tutor)
     except WebSocketDisconnect as exc:
         why = f"page disconnected (code {exc.code})"
         return
@@ -706,6 +734,8 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
         closing = timing.now()
         if mapper is not None:
             await mapper.close()
+        if tutor is not None:
+            await tutor.close()
         if eyes is not None:
             await eyes.close()
             # Sharing ends with the socket: a reload starts unshared, and the
@@ -772,6 +802,7 @@ async def handle_text(
     record: Record | None = None,
     eyes: Eyes | None = None,
     mapper: Mapper | None = None,
+    tutor: Tutor | None = None,
 ) -> None:
     try:
         payload = json.loads(raw)
@@ -824,6 +855,10 @@ async def handle_text(
                 # Not awaited here: a final redraw may take half a minute, and
                 # the socket must keep reading meanwhile.
                 session.finishing = asyncio.create_task(mapper.finish())
+            elif to == "teach" and tutor is not None:
+                await tutor.start()
+            elif to == "finish" and tutor is not None:
+                await tutor.finish()
         return
 
     if kind == "map_step":

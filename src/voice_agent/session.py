@@ -25,6 +25,7 @@ would say. It never starts a turn.
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 
@@ -218,6 +219,18 @@ class Session:
             report=channel.send_json,
             ladder=LADDER if ladder is None else ladder,
         )
+
+    async def become(self, system_prompt: str) -> None:
+        """Play another part from here on — the apprentice turning tutor. Every
+        call this conversation makes reads the new prompt, the clock watches
+        the screen as a tutor does, and the inner voice, which thinks as the
+        apprentice, stops."""
+        self._context = dataclasses.replace(self._context, system_prompt=system_prompt)
+        self._speculator.become(system_prompt)
+        self._initiative.become(system_prompt)
+        if self._thinker is not None:
+            await self._thinker.stop()
+            self._thinker = None
 
     def noticed(self, seen: str | None) -> None:
         """The eyes saw something change: the clock may speak about it at the

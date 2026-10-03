@@ -3,7 +3,7 @@
 
 import { createAwake, screenLine, screenNote, worthRecording } from "./awake.js";
 import { canShare, createEyes } from "./eyes.js";
-import { progress as mapProgress, renderMap } from "./workmap.js";
+import { progress as mapProgress, renderMap, renderMastery } from "./workmap.js";
 import { paintFloor, record as recordFloor } from "./floor.js";
 import { buildMic, micFailure } from "./mic.js";
 import { WARN_MS, countdown } from "./timer.js";
@@ -313,12 +313,16 @@ const FLOW_BUTTON = {
   capture: ["Finish capture ▶", false],
   mapping: ["Drawing the map…", true],
   map: ["Finish map ▶", false],
-  mapped: ["③ Teach — next chapter", true],
+  mapped: ["Start teaching ▶", false],
+  teach: ["Finish teaching ▶", false],
+  assessing: ["Writing your report…", true],
+  taught: ["✓ Done", true],
 };
+const TEACHING = new Set(["teach", "assessing", "taught"]);
 function setPhase(p) {
   phaseNow = p;
   const order = ["capture", "map", "teach"];
-  const at = p === "capture" ? 0 : p === "mapped" ? 2 : 1;
+  const at = p === "capture" ? 0 : TEACHING.has(p) ? 2 : 1;
   for (const el of flow.querySelectorAll(".f-step")) {
     const i = order.indexOf(el.dataset.phase);
     el.classList.toggle("now", i === at);
@@ -327,16 +331,18 @@ function setPhase(p) {
   const [label, off] = FLOW_BUTTON[p] ?? FLOW_BUTTON.capture;
   flowNext.textContent = label;
   flowNext.disabled = off || over;
-  // No new screenshots once capture is over: the map is drawn from what was seen.
-  if (p !== "capture") {
-    eyes?.stop();
-    shareButton.hidden = true;
-  }
+  // The screen is watched while capturing and while teaching; between and
+  // after, nothing new is seen.
+  const watching = p === "capture" || p === "teach";
+  if (!watching) eyes?.stop();
+  shareButton.hidden = !eyes || !watching;
 }
 flowNext.onclick = () => {
   if (!sending()) return;
   if (phaseNow === "capture") ws.send(phase("map"));
   else if (phaseNow === "map") ws.send(phase("done"));
+  else if (phaseNow === "mapped") ws.send(phase("teach"));
+  else if (phaseNow === "teach") ws.send(phase("finish"));
 };
 function holder() {
   if (!mapHolder) mapHolder = add("", "maphold");
@@ -363,15 +369,26 @@ function waitForMap(msg) {
     if (wait) wait.innerHTML = paint();
   }, 250);
 }
+let reportHolder = null;  // the teaching report, or the wait for it
+let reportTick = null;
+function showMastery(report) {
+  clearInterval(reportTick);
+  reportHolder ??= add("", "maphold");
+  stick(() => { reportHolder.innerHTML = renderMastery(report); });
+  reportHolder.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
 function showMap(drawn) {
   clearInterval(mapTick);
   const el = holder();
   const first = !el.querySelector(".workmap");
   stick(() => { el.innerHTML = renderMap(drawn, key); });
   toMap.hidden = false;
-  // A step opened is a step said: the apprentice reads it out.
+  // A step opened is a step said: the apprentice reads it out — unless the
+  // tutor opened it, having just said it.
   for (const item of el.querySelectorAll(".m-step")) {
     item.querySelector("details").addEventListener("toggle", (event) => {
+      if (item.dataset.quiet) { delete item.dataset.quiet; return; }
       if (event.target.open && sending()) ws.send(mapStep(Number(item.dataset.step)));
     });
   }
@@ -450,6 +467,7 @@ const handlers = {
     if (msg.mapped && msg.work_map) {
       showMap({ map: msg.work_map, version: msg.map_version, creator: msg.mapper?.title });
     }
+    if (msg.mapped && msg.mastery) showMastery(msg.mastery);
     if (msg.ended) {
       add("This conversation has ended.", "note");
       setEnabled(false);
@@ -569,6 +587,45 @@ const handlers = {
   },
 
   mapped() { setPhase("mapped"); },
+
+  teaching() { setPhase("teach"); },
+
+  // The tutor named a step of the map: open it, with the expert's screenshot.
+  map_focus(msg) {
+    const item = mapHolder?.querySelector(`.m-step[data-step="${Number(msg.n)}"]`);
+    if (!item) return;
+    for (const other of mapHolder.querySelectorAll(".m-step.focus")) other.classList.remove("focus");
+    item.classList.add("focus");
+    const details = item.querySelector("details");
+    if (!details.open) { item.dataset.quiet = "1"; details.open = true; }
+    item.scrollIntoView({ block: "center", behavior: "smooth" });
+  },
+
+  assessing(msg) {
+    setPhase("assessing");
+    clearInterval(reportTick);
+    const began = performance.now();
+    reportHolder ??= add("", "maphold");
+    const paint = () => mapProgress(msg.creator ?? "The tutor", (performance.now() - began) / 1000,
+      msg.expected_s, false, "writing your report");
+    reportHolder.innerHTML = `<section class="mapwait" role="status">${paint()}</section>`;
+    reportHolder.scrollIntoView({ block: "center", behavior: "smooth" });
+    reportTick = setInterval(() => {
+      const wait = reportHolder.querySelector(".mapwait");
+      if (wait) wait.innerHTML = paint();
+    }, 250);
+  },
+
+  mastery(msg) { showMastery(msg); setPhase("taught"); },
+
+  assess_failed(msg) {
+    clearInterval(reportTick);
+    setPhase("teach");
+    if (reportHolder) {
+      reportHolder.innerHTML = `<section class="mapwait"><p class="m-wait">🎓 The report could not be written: ` +
+        `${String(msg.error).replace(/[&<>"']/g, "")}. Press <b>Finish teaching</b> to try again.</p></section>`;
+    }
+  },
 
   floor(msg) { recordFloor(floorEvents, msg, performance.now()); },
 

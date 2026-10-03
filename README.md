@@ -28,6 +28,7 @@ previous one. [CHANGELOG.md](CHANGELOG.md) has the reasoning.
 - **2 — Eyes.** Share a screen, window or tab at any time (🖥 share). Changed frames are read by Claude (Sonnet 5.5 by default, which reads small dates and digits; Haiku 4.5 as the cheaper choice; about 2.5–3.5 s each), and what it sees joins the conversation. The apprentice knows whether it can see, may ask about what you just did at a short pause, and the **eyes** toggle shows every reading. Frames are never stored.
 - **3 — Live eyes.** The screen is read the moment you start speaking, readings take 1.1–2.4 s (shorter output, 1024 px frames), two run overlapped with the newest result winning, replies stay around 25 words, and an unprompted line about a screen that has since changed is dropped and reconsidered.
 - **4 — The Work Map.** A flow bar, Capture ▸ Map ▸ Teach. **Finish capture** draws the map from the conversation (~25–30 s, DeepSeek or Claude Opus as "Map creator"). Its steps link to stored screenshots and quote the expert word for word, with code marking any quote it cannot find. The apprentice explains the map back, says any step you click, asks the open questions, and redraws the map from your corrections.
+- **5 — Teach.** **Start teaching** turns the apprentice into the tutor on the same page. A new hire works a new case on a shared screen; the tutor asks them to predict at judgment calls and, the moment it sees one of the expert's guardrails broken, stops them, opens that step with the expert's screenshot, and explains in the expert's words (decided in about 1 s once seen). **Finish teaching** writes a report of what was mastered, what was caught and what to practise, as a card and aloud. Interventions need the microphone listening.
 
 ### The inherited foundation
 
@@ -81,6 +82,8 @@ prompts/vision.md, eyes_nudge.md  what the eyes report; when what they saw is wo
   workmap.py              the Work Map: drawn from the conversation, checked, redrawn, spoken
   web/workmap.js          the map card and its wait
 prompts/workmap.md        what the map creator is asked for
+  teach.py                teaching: the tutor's part, starting and finishing, the report
+prompts/tutor.md, tutor_nudge.md, teach_report.md  the tutor, what it checks on screen, the report
 tests/                    pytest; tests/web/ node tests; tests/tapes/ replayed conversations
 scripts/                  operational helpers
 ```

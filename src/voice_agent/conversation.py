@@ -14,6 +14,11 @@ from voice_agent.timeline import Timeline
 
 Role = Literal["user", "assistant"]
 
+TEACHING_STARTS = (
+    "[teaching starts here — everything before this was the expert's own session; "
+    "what is said and seen after this is the new hire, on their own case]"
+)
+
 SCREEN_NOTES = 40
 """How many of the latest screen notes every call carries. Thirty minutes of
 sharing is hundreds of them, resent on every turn; older ones are counted, not
@@ -108,12 +113,19 @@ class Conversation:
     """What the eyes saw, in order: what `context` interleaves with the messages."""
     phase: str = "capture"
     """The apprentice's flow: `capture`, `mapping` (the map is being drawn),
-    `map` (shown and being corrected), `mapped` (confirmed). Other roles stay
-    in `capture`, which is simply the conversation."""
+    `map` (shown and being corrected), `mapped` (confirmed), `teach` (the
+    apprentice tutors a new hire), `assessing` (the report is being written),
+    `taught`. Other roles stay in `capture`, which is simply the conversation."""
     mapper: str | None = None
     """Which map creator draws the Work Map (`workmap.CREATORS`), pinned."""
     work_map: dict[str, Any] | None = None
     map_version: int = 0
+    teach_from: int | None = None
+    """Where teaching began, as an index into `messages`, and into `seen`
+    (`teach_seen_from`): the report reads only what came after."""
+    teach_seen_from: int = 0
+    mastery: dict[str, Any] | None = None
+    """The teaching report, once Finish teaching has produced one."""
     map_note: str = ""
     """The current map as the model reads it, in `context`."""
     frames: list[dict[str, Any]] = field(default_factory=list)
@@ -135,24 +147,40 @@ class Conversation:
                 at = len(said) - 1 if said and said[-1].role == "user" else len(said)
                 said.insert(at, Message("user", self.map_note))
             return said
+        # Notes by the message they follow, the expert's apart from the new
+        # hire's: once teaching starts, the tutor must never mistake one for
+        # the other, and a new hire's first screen changes can follow the
+        # expert's last words before the handover line is said.
         notes: dict[int, list[Message]] = {}
+        taught: dict[int, list[Message]] = {}
         kept = self.seen[-SCREEN_NOTES:]
-        earlier = len(self.seen) - len(kept)
-        for glimpse in kept:
+        first = len(self.seen) - len(kept)
+        teaching = self.teach_from is not None
+        for index, glimpse in enumerate(kept, start=first):
             anchor = id(glimpse.after) if glimpse.after is not None else 0
-            if earlier:
-                summary = f"[screen: {earlier} earlier changes not shown]"
-                notes.setdefault(anchor, []).append(Message("user", summary))
-                earlier = 0
-            notes.setdefault(anchor, []).append(Message("user", seen_note(glimpse)))
+            held = taught if teaching and index >= self.teach_seen_from else notes
+            if index == first and first:
+                summary = f"[screen: {first} earlier changes not shown]"
+                held.setdefault(anchor, []).append(Message("user", summary))
+            held.setdefault(anchor, []).append(Message("user", seen_note(glimpse)))
         known = {id(m) for m in self.messages}
         context: list[Message] = [
-            note for anchor, held in notes.items() if anchor not in known for note in held
+            note
+            for group in (notes, taught)
+            for anchor, held_notes in group.items()
+            if anchor not in known
+            for note in held_notes
         ]
-        for message in self.messages:
+        boundary = Message("user", TEACHING_STARTS)
+        if teaching and self.teach_from == 0:
+            context.insert(0, boundary)
+        for index, message in enumerate(self.messages):
             if message is not self.opening:
                 context.append(message)
             context.extend(notes.get(id(message), ()))
+            if teaching and index == (self.teach_from or 0) - 1:
+                context.append(boundary)
+            context.extend(taught.get(id(message), ()))
         if self.map_note:
             context.append(Message("user", self.map_note))
         status = Message("user", eyes_status(self.screen, self.phase))
@@ -217,7 +245,7 @@ def seen_note(glimpse: Glimpse) -> str:
 
 def eyes_status(screen: Screen, phase: str = "capture") -> str:
     """Whether it can see, right before the turn it is about to answer."""
-    if phase != "capture":
+    if phase not in ("capture", "teach"):
         return "[eyes: capture is finished — the screen is no longer shared]"
     if not screen.sharing:
         return "[eyes: not sharing — you cannot see their screen right now]"

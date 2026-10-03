@@ -69,20 +69,26 @@ ORDINALS = [
 ]
 
 
-def script(conversation: Conversation) -> tuple[str, dict[str, str]]:
+def script(
+    conversation: Conversation, messages_from: int = 0, seen_from: int = 0
+) -> tuple[str, dict[str, str]]:
     """The conversation as the map creator reads it — numbered messages and
     numbered screen moments, in order — and the messages by number, for
-    checking quotes."""
+    checking quotes. `messages_from` and `seen_from` start it later: the
+    teaching report reads only the teaching."""
     by_id: dict[str, str] = {}
     later: dict[int, list[str]] = {}
-    for glimpse in conversation.seen:
+    for glimpse in conversation.seen[seen_from:]:
         anchor = id(glimpse.after) if glimpse.after is not None else 0
         shot = "" if glimpse.frame else " (no screenshot)"
         where = f" {glimpse.app}" if glimpse.app else ""
         line = f"[{glimpse.id} {glimpse.clock}{where}{shot}: {'; '.join(glimpse.events)}]"
         later.setdefault(anchor, []).append(line)
-    lines = list(later.get(0, []))
+    known = {id(m) for m in conversation.messages[messages_from:]}
+    lines = [line for anchor, held in later.items() if anchor not in known for line in held]
     for number, message in enumerate(conversation.messages, start=1):
+        if number <= messages_from:
+            continue
         mid = f"m{number}"
         by_id[mid] = message.content
         who = "EXPERT" if message.role == "user" else "APPRENTICE"
@@ -230,9 +236,10 @@ def note(work_map: dict[str, Any], version: int) -> str:
     return f"[work map v{version}, on their page: {steps}. Still unclear: {gaps}]"
 
 
-def spoken_step(step: dict[str, Any]) -> str:
+def spoken_step(step: dict[str, Any], teaching: bool = False) -> str:
     """What the apprentice says when a step is clicked: built, not generated,
-    so it is instant and says exactly what the map says."""
+    so it is instant and says exactly what the map says. To the expert the
+    reason is "your words"; to a new hire being taught, the expert's."""
     n = step["n"]
     number = ORDINALS[n] if n < len(ORDINALS) else str(n)
     # The first sentence: a clicked step is a reminder, not a reading.
@@ -244,7 +251,10 @@ def spoken_step(step: dict[str, Any]) -> str:
     )
     reason = step.get("reason")
     if reason:
-        line += f" In your words: “{reason['quote']}”"
+        whose = "The expert said" if teaching else "In your words"
+        line += f" {whose}: “{reason['quote']}”"
+    elif teaching:
+        line += " The expert never said why — what do you think?"
     else:
         line += " I still don't know why — can you tell me?"
     return line
@@ -368,7 +378,8 @@ class Mapper:
         work_map = self._conversation.work_map
         if work_map is None:
             return None
-        return next((spoken_step(s) for s in work_map["steps"] if s["n"] == n), None)
+        teaching = self._conversation.phase in ("teach", "assessing", "taught")
+        return next((spoken_step(s, teaching) for s in work_map["steps"] if s["n"] == n), None)
 
     async def finish(self) -> None:
         """The expert confirmed the map: it is the one teaching starts from."""

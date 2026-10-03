@@ -106,6 +106,10 @@ class Speculator:
         self.adopted = False
         self.lead_ms = 0
 
+    def become(self, system: str) -> None:
+        """Guess from here on as another part (`Session.become`)."""
+        self._system = system
+
     def on_settled(self, stable: str, history: Sequence[Message]) -> None:
         """The recognizer found nothing new: bet that the speaker has stopped."""
         if self._guess is None:

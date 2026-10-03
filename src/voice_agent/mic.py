@@ -22,9 +22,12 @@ from voice_agent.vad import VAD, WINDOW_MS, Detector
 
 logger = logging.getLogger(__name__)
 
-IDLE_TIMEOUT_SECONDS = 30.0
+IDLE_TIMEOUT_SECONDS = 60.0
 """How long with no *speech* before listening stops. The microphone streams
-silence continuously, so the signal is the absence of partial transcripts."""
+silence continuously, so the signal is the absence of partial transcripts.
+A minute, not half of one: someone working on a shared screen reads results
+and types in silence far longer than they pause in conversation, and a screen
+that changes only resets this when the eyes report something (`active`)."""
 
 SESSION_CAP_SECONDS = 1800.0
 """A backstop for a room that never stops producing partials (a television).

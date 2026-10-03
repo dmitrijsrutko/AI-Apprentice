@@ -17,14 +17,14 @@ const KINDS = {
 };
 
 // The wait while the map is drawn, like the judge's.
-export function progress(title, elapsed, expected = EXPECTED_S, redraw = false) {
+export function progress(title, elapsed, expected = EXPECTED_S, redraw = false, doing = "") {
   const seconds = Math.max(0, Math.floor(elapsed));
   const filled = Math.min(CELLS, Math.floor((seconds / expected) * CELLS));
   const bar = "▰".repeat(filled) + "▱".repeat(CELLS - filled);
   const late = seconds > expected;
   const line = late
     ? "Taking longer than usual — still drawing…"
-    : `${escape(title)} is ${redraw ? "redrawing the map with your corrections" : "drawing the map"}…`;
+    : `${escape(title)} is ${doing || (redraw ? "redrawing the map with your corrections" : "drawing the map")}…`;
   const count = late ? `${seconds} s` : `${seconds} s of ~${expected} s`;
   return `<p class="m-wait"><span class="m-icon">🗺</span> ${line}</p>` +
     `<p class="m-progress">${bar}  ${count}</p>`;
@@ -86,4 +86,28 @@ export function renderMap(drawn, key) {
     `<header><span class="m-icon">🗺</span> <b>${escape(map.title ?? "Work Map")}</b></header>` +
     `${map.summary ? `<p class="m-summary">${escape(map.summary)}</p>` : ""}` +
     `<ol class="m-steps">${steps}</ol>${gaps}<footer>${by}</footer></section>`;
+}
+
+// The teaching report: what the new hire mastered, which of the expert's rules
+// they broke or nearly broke (in the expert's words), and what to practise.
+export function renderMastery(report) {
+  const list = (items, cls, line) => items?.length
+    ? `<ul class="${cls}">${items.map((i) => `<li>${line(i)}</li>`).join("")}</ul>` : "";
+  const mastered = list(report?.mastered, "t-mastered",
+    (m) => `✓ <b>${escape(m.step)}</b> ${escape(m.note)}`);
+  const caught = list(report?.caught, "t-caught",
+    (c) => `⚠ <b>${escape(c.step)}</b> ${escape(c.what)} — ${escape(c.rule)}` +
+      `${c.quote ? ` <q>${escape(c.quote)}</q>` : ""}`);
+  const practice = list(report?.practice, "t-practice", (p) => `→ ${escape(p)}`);
+  const by = [
+    report?.creator ? `Written by ${escape(report.creator)}` : "",
+    report?.ms ? `in ${Math.round(report.ms / 1000)} s` : "",
+  ].filter(Boolean).join(" ");
+  return `<section class="workmap mastery" id="mastery">` +
+    `<header><span class="m-icon">🎓</span> <b>Teaching report</b></header>` +
+    `${report?.headline ? `<p class="m-summary">${escape(report.headline)}</p>` : ""}` +
+    `${mastered ? `<div><b>Mastered</b>${mastered}</div>` : ""}` +
+    `${caught ? `<div><b>Caught by the tutor</b>${caught}</div>` : ""}` +
+    `${practice ? `<div><b>Practise next</b>${practice}</div>` : ""}` +
+    `<footer>${by}</footer></section>`;
 }

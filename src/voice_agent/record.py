@@ -34,7 +34,9 @@ SPEAKERS = {
 """Frames carrying something the user read or heard. Everything else is a note
 attached to whatever came before it."""
 
-NOISE = frozenset({"delta", "marks", "audio_start", "reply_start", "floor", "look", "work_map"})
+NOISE = frozenset(
+    {"delta", "marks", "audio_start", "reply_start", "floor", "look", "work_map", "mastery"}
+)
 """One frame per token, per audio chunk, or per change of who is speaking.
 Keeping them would bury the conversation in its own telemetry; the trace holds
 them."""
@@ -434,6 +436,21 @@ class Record:
         if gaps := work_map.get("gaps"):
             lines += ["", "Still unclear:", *[f"- {gap}" for gap in gaps]]
         self.block("work map", "\n".join(lines), "")
+        self.flush()
+
+    def mastery(self, report: Mapping[str, Any]) -> None:
+        """The teaching report, so the record reads without the page."""
+        seconds = round((report.get("ms") or 0) / 1000)
+        lines = [f"**{report.get('headline', '')}** ({seconds} s)", ""]
+        lines += [
+            f"- mastered {m.get('step')}: {m.get('note')}" for m in report.get("mastered") or []
+        ]
+        lines += [
+            f"- caught {c.get('step')}: {c.get('what')} — {c.get('rule')} (“{c.get('quote')}”)"
+            for c in report.get("caught") or []
+        ]
+        lines += [f"- practise: {p}" for p in report.get("practice") or []]
+        self.block("teaching report", "\n".join(lines), "")
         self.flush()
 
     def ruling(self, ruling: Mapping[str, Any]) -> None:

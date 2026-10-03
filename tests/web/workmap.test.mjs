@@ -56,3 +56,24 @@ test("the wait fills over the expected time, then says it is late", () => {
   assert.ok(progress("Opus", 45).includes("Taking longer"));
   assert.ok(progress("Opus", 1, 30, true).includes("redrawing"));
 });
+
+import { renderMastery } from "../../src/voice_agent/web/workmap.js";
+
+test("the teaching report lists what was caught, in the expert's words, escaped", () => {
+  const html = renderMastery({
+    headline: "Nearly <b>ready</b>",
+    mastered: [{ step: "1. Filter", note: "Direct only" }],
+    caught: [{ step: "2. Pick", what: "Two stops", rule: "One stop at most", quote: "he hates layovers" }],
+    practice: ["Check the time first"],
+    creator: "Claude Opus 5.5",
+    ms: 18000,
+  });
+  assert.ok(html.includes("Nearly &#60;b&#62;ready&#60;/b&#62;"));
+  assert.ok(html.includes("<q>he hates layovers</q>"));
+  assert.ok(html.includes("Caught by the tutor") && html.includes("Practise next"));
+  assert.ok(html.includes("in 18 s"));
+});
+
+test("a report with nothing caught leaves that section out", () => {
+  assert.ok(!renderMastery({ headline: "x", mastered: [], caught: [], practice: [] }).includes("Caught"));
+});

@@ -126,8 +126,8 @@ class Eyes:
     def frame(self, jpeg: bytes) -> None:
         """A changed frame from the page. Read now if nothing is being read,
         else it waits — replacing whatever was waiting."""
-        if not self.sharing or self._conversation.phase != "capture":
-            return  # sent after the share stopped, or after capture: nothing to see
+        if not self.sharing or self._conversation.phase not in ("capture", "teach"):
+            return  # sent after the share stopped, or between capture and teaching
         if self._max_frames is not None and self._reads >= self._max_frames:
             if not self._capped:
                 self._capped = True
