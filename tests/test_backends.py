@@ -139,13 +139,13 @@ def test_the_menu_offers_only_what_holds_a_key(monkeypatch: pytest.MonkeyPatch) 
     )
 
 
-def test_the_default_is_v4_1_flash_with_thinking_off(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_default_is_v4_1_flash_thinking_high(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.setenv(name, "sk-test")
 
     pool = Backends("assemblyai")
 
-    assert pool.default_engine == DEFAULT_CHOICE == "deepseek-off"
+    assert pool.default_engine == DEFAULT_CHOICE == "deepseek-high"
     assert pool.menu.index(CHOICES[0]) == 0, "the menu keeps its order"
 
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -164,7 +164,7 @@ def test_an_option_that_cannot_be_run_is_not_offered(monkeypatch: pytest.MonkeyP
 
     chosen, _, _, _ = pool.choose(conversation, {"llm": "opus-5-5"})
 
-    assert chosen == "deepseek-off"
+    assert chosen == "deepseek-high"
 
     kept, _, _, _ = pool.choose(Conversation(id="u"), {"llm": "deepseek-low"})
     assert kept == "deepseek-low"

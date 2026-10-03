@@ -15,6 +15,50 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 1 — The apprentice, by ear: a role that learns how you work
+
+A new role, **AI apprentice**, now the start screen's default. The expert talks
+it through a task they do often. It asks *why*, digs for the limits, the
+exceptions and the moment to stop and ask someone, and when the expert is done
+it explains the process back until they confirm. It has no eyes yet. This is
+Capture and Debrief rehearsed by voice alone, so the next chapter only has to
+add the screen.
+
+**What changed**
+- `prompts/roles/ai_apprentice.md` (new): the card. It is built on Thinking
+  partner, with an apprentice's job: reasons and guardrails over steps, never
+  correcting the expert, and leading when something is missing (a concrete
+  case, the number behind "too expensive").
+- `roles.py`: `DEFAULT_ROLE = "ai_apprentice"`. It also sorts first.
+- `llm/registry.py`: `DEFAULT_CHOICE = "deepseek-high"`, DeepSeek V4.1 Flash
+  at the "smartest" tier.
+- `tests/scenarios/walking_through.md` (new): an expert narrating a flight
+  booking, labelled where a reason or a limit is missing.
+- Tests that pinned the old defaults now pin the new ones.
+
+**Design decisions**
+- **A card, not code.** Roles are data: a card reaches the thinker and the
+  system prompt with no pipeline change. The turn policy the memo asks for
+  (narration is not a request) is code, and waits for the eyes.
+- **Built on Thinking partner, not Devil's advocate.** An apprentice is on the
+  expert's side and never the expert. It asks what made a decision, not
+  whether it was right.
+- **`clarify` first among the moves**: it asks before it pushes. `challenge`
+  stays for contradictions ("earlier you said…").
+- **The explain-back is the one long turn.** Everywhere else, one question in
+  two sentences. A teach-back that is cut short proves nothing.
+- **Smartest by default.** The quality of the question is what the brief
+  judges, and thinking costs time to first token.
+
+**Latency impact** — not measured. Effort `high` thinks before it answers, so
+the first token comes later than at `off`. It still needs a measurement.
+
+**Deliberately not done** — eyes (screen frames to events, next chapter), the
+Capture turn policy, the Work Map, the tutor.
+
+**Verification** — `uv run verify` (913 passed). The new scenario parses and
+passes the fake replay. Not yet exercised in a live conversation.
+
 ## Chapter 0 — The empty page, again: a new project on a working voice pipeline
 
 AI-Apprentice starts as a separate project, with its own repository and its own

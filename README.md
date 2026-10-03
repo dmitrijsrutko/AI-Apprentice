@@ -24,6 +24,7 @@ Built in **chapters**, each one deliberate piece on top of a working, tested
 previous one. [CHANGELOG.md](CHANGELOG.md) has the reasoning.
 
 - **0 — The empty page, again.** A new project with a fresh history, standing on an inherited voice pipeline. The brief is added as context, and the working contract ([AGENTS.md](AGENTS.md)) is kept.
+- **1 — The apprentice, by ear.** A new default role, **AI apprentice**: the expert talks it through a task; it asks why, finds the limits and exceptions, and explains the process back until they confirm. There are no eyes yet. The default model is DeepSeek V4.1 Flash, smartest.
 
 ### The inherited foundation
 

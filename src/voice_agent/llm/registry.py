@@ -117,9 +117,10 @@ Repeating it in every option made each one wide enough that a group wrapped,
 which is the one thing the grouping exists to avoid.
 """
 
-DEFAULT_CHOICE = "deepseek-off"
-"""What a conversation runs unless it picks another: the fastest of the top row,
-so the page's default is its leftmost option, as in every other group."""
+DEFAULT_CHOICE = "deepseek-high"
+"""What a conversation runs unless it picks another: DeepSeek's smartest, not
+its fastest. An apprentice is judged on the question it asks more than on how
+soon it asks it, and the thinking is paid for in time to first token."""
 
 BY_NAME: dict[str, Choice] = {choice.name: choice for choice in CHOICES}
 

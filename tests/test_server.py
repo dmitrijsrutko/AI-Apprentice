@@ -1097,7 +1097,7 @@ def test_the_page_offers_only_models_this_deployment_has_keys_for(
         "deepseek-high",
     ]
     assert [o["name"] for o in choices["stt"]] == ["assemblyai", "elevenlabs"]
-    assert [o["name"] for o in choices["llm"] if o["default"]] == ["deepseek-off"]
+    assert [o["name"] for o in choices["llm"] if o["default"]] == ["deepseek-high"]
     assert [o["name"] for o in choices["stt"] if o["default"]] == ["assemblyai"]
 
     # The menu is fixed when the app is built, so this needs a second app.

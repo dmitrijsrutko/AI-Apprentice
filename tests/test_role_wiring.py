@@ -135,14 +135,19 @@ def test_a_conversation_that_picks_the_role_plays_it() -> None:
     assert "# Your role in this conversation" in llm.systems[0]
 
 
-def test_by_default_the_devil_s_advocate_plays(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_by_default_the_apprentice_plays(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VOICE_AGENT_ROLE", raising=False)
+    apprentice = roles.load("ai_apprentice")
     llm = FakeLLM()
     with app_with(llm) as client:
         ready, greeting = converse(client, mint(client))
 
-    assert greeting == ROLE.opening
-    assert ready["role"] == {"slug": ROLE.slug, "name": ROLE.name, "summary": ROLE.summary}
+    assert greeting == apprentice.opening
+    assert ready["role"] == {
+        "slug": apprentice.slug,
+        "name": apprentice.name,
+        "summary": apprentice.summary,
+    }
 
 
 def test_the_operator_may_still_run_the_plain_assistant() -> None:
@@ -185,7 +190,7 @@ def test_the_start_screen_offers_only_cards_and_preselected_as_asked() -> None:
 
     served = json.loads(page.split('id="facts" type="application/json">')[1].split("</script>")[0])
     offered = served["choices"]["role"]
-    assert [o["name"] for o in offered] == ["devils_advocate", "thinking_partner"]
+    assert [o["name"] for o in offered] == ["ai_apprentice", "devils_advocate", "thinking_partner"]
     assert [o["name"] for o in offered if o["default"]] == ["devils_advocate"]
 
 

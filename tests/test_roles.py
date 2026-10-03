@@ -46,8 +46,8 @@ def write(directory: Path, slug: str, text: str) -> Path:
 def test_every_shipped_role_loads() -> None:
     shipped = roles.available()
 
-    assert "devils_advocate" in shipped
-    assert roles.DEFAULT_ROLE == "devils_advocate"
+    assert {"ai_apprentice", "devils_advocate", "thinking_partner"} <= set(shipped)
+    assert roles.DEFAULT_ROLE == "ai_apprentice"
     assert roles.DEFAULT_ROLE in shipped, "the default has to be a card that ships"
     for slug in shipped:
         role = roles.load(slug)

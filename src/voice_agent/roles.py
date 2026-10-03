@@ -37,7 +37,7 @@ NO_ROLE = "none"
 nor accepted from `?role=`; only what runs with no cards at all, or when an
 operator pre-selects it with `VOICE_AGENT_ROLE=none` (the test suite does)."""
 
-DEFAULT_ROLE = "devils_advocate"
+DEFAULT_ROLE = "ai_apprentice"
 """What the start screen has selected before anyone chooses. `VOICE_AGENT_ROLE`
 / `--role` pre-select another card; each conversation still picks its own."""
 
