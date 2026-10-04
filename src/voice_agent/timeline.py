@@ -34,7 +34,9 @@ class Turn:
     """User only: onset minus the end of the agent's previous turn. Negative when
     they started while the agent was still speaking."""
     cut: float | None = None
-    """Agent only: heard for this many seconds before the user cut it off."""
+    """Agent only: heard for this many seconds before it was cut off."""
+    cut_by_screen: bool = False
+    """Agent only: it cut itself off, because the screen changed under it."""
     of: float | None = None
     """Agent only: how long the whole reply would have played."""
     typed: bool = False
@@ -102,6 +104,8 @@ class Timeline:
             self._add("text", {"text": payload.get("text", "")})
         elif kind in ("audio_start", "audio_end", "truncated"):
             self._add(kind, payload)
+        elif kind == "overtaken" and payload.get("decision") == "stop":
+            self._add("overtaken", payload)
 
     def typed(self, text: str) -> None:
         self._add("typed", {"text": text})
@@ -170,7 +174,16 @@ class Timeline:
             (e.at for e in window if e.kind == "quiet" and e.at >= start and cut is None), None
         )
         spoken = cut if cut is not None else (quiet - start if quiet is not None else full)
-        return Turn("advocate", start, text.strip(), spoken=spoken, cut=cut, of=full)
+        by_screen = cut is not None and any(e.kind == "overtaken" for e in window)
+        return Turn(
+            "advocate",
+            start,
+            text.strip(),
+            spoken=spoken,
+            cut=cut,
+            of=full,
+            cut_by_screen=by_screen,
+        )
 
 
 def with_think_times(turns: list[Turn]) -> list[Turn]:

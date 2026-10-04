@@ -23,7 +23,7 @@ from typing import Any
 
 from voice_agent import judge, roles, thinker, timing
 from voice_agent.config import build_prompt
-from voice_agent.conversation import Conversation, Message
+from voice_agent.conversation import Conversation, Glimpse, Message
 from voice_agent.greeting import greet
 from voice_agent.initiative import LADDER, Rung
 from voice_agent.llm.base import Usage
@@ -102,7 +102,8 @@ def parse(text: str, name: str) -> Tape:
         greeting <text>            role <card>            ladder 5,15,28 | off
         llm <ttft> <pace>          reply <match> = <text>  think <match> = <json>
         <t> listen | unlisten | voice on | voice off | partial <text>
-            | final <text> [lang=<code>] | type <text> | end
+            | final <text> [lang=<code>] | type <text> | seen <events> | end
+    `seen`: the eyes read a change on the shared screen (events joined by "; ").
     A `reply` or `think` repeated for the same match is used in order, the last
     one again after that. `<match>` is a substring of the last message.
     """
@@ -281,6 +282,17 @@ class Browser:
         self.timeline: Timeline | None = None
         """Tapped as `Channel` taps it, so the goldens show what a judge reads."""
 
+    def saw(self, events: str) -> None:
+        """What `Eyes.saw` does with a reading that found a change."""
+        assert self.session is not None
+        conversation = self.session.conversation
+        last = conversation.messages[-1] if conversation.messages else None
+        glimpse = Glimpse(last, "0:00", "Flights", tuple(events.split("; ")), id="g")
+        conversation.seen.append(glimpse)
+        conversation.screen.now = events
+        self._log("<", f"seen {short(events)!r}")
+        self.session.noticed(events)
+
     def typed(self, text: str) -> None:
         """`Channel` keeps typed turns for a reload; a tape never reloads."""
 
@@ -399,6 +411,7 @@ FIELDS: dict[str, tuple[str, ...]] = {
     "error": ("message",),
     "listen_error": ("message",),
     "ended": ("reason",),
+    "overtaken": ("decision", "ms"),
 }  # fmt: skip
 QUIET = frozenset({"delta", "marks", "audio_start", "reply_start"})
 
@@ -512,6 +525,8 @@ async def _act(browser: Browser, verb: str, arg: str, name: str) -> None:
         browser.voice_on = arg == "on"
     elif verb == "type":
         browser.send({"type": "message", "text": arg}, f"typed {arg!r}")
+    elif verb == "seen":
+        browser.saw(arg)
     elif verb in ("partial", "final", "end"):
         pass  # the recognizer's own schedule; `end` stops the tape
     else:

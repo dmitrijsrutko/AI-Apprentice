@@ -31,6 +31,8 @@ previous one. [CHANGELOG.md](CHANGELOG.md) has the reasoning.
 - **5 — Teach.** **Start teaching** turns the apprentice into the tutor on the same page. A new hire works a new case on a shared screen; the tutor asks them to predict at judgment calls and, the moment it sees one of the expert's guardrails broken, stops them, opens that step with the expert's screenshot, and explains in the expert's words (decided in about 1 s once seen). **Finish teaching** writes a report of what was mastered, what was caught and what to practise, as a card and aloud. Interventions need the microphone listening.
 - **6 — Sharper eyes.** A small change is sent twice: the whole screen (1024 px, JPEG 0.85) for context, and a close-up of what changed at the screen's own resolution (PNG), which values are read from (🔍 in the eyes view). On a flight page with an itinerary opened, Haiku went from 2–6 of 10 values with "16 Oct" misread as "18 Oct" to 10 of 10 with no misreads. Sonnet read 10 of 10 either way, at +0–0.5 s and +270–960 tokens per reading ([docs/eyes-eval.md](docs/eyes-eval.md)). A reply to a question waits up to 1.5 s for the reading of the screen as it was when you started speaking, and a guessed reply made before that reading is dropped.
 
+- **7 — The screen overtakes the voice.** If the screen changes while the agent is talking and the rest of its line is now wrong (you switched Tallinn to Riga), it stops itself at the word you last heard and says something fresh about the screen as it is now (~0.8 s to decide, on DeepSeek V4.1 Flash with thinking off; Sonnet 5.5 without a DeepSeek key). A scroll or a page load is talked through. On the live traces half of all lines had a screen change land mid-speech.
+
 **Known limitation.** Screenshots go to Anthropic as they are. The model masks personal data in what it writes, not in the image, and the screenshots kept for the Work Map are not blurred (`--purge-sessions` deletes them).
 
 ### The inherited foundation
@@ -80,6 +82,7 @@ prompts/                  system prompt, rules, role cards, inner voice, judge
 src/voice_agent/          the inherited pipeline: server, session, turn-taking,
                           llm/ stt/ tts/ adapters, web/ (the browser page)
   eyes.py                 the shared screen: one frame read at a time, the newest waiting
+  overtaken.py            a change mid-speech: is the rest of the line still right?
   llm/vision.py           Claude reads a frame: what is on screen, what changed
   web/eyes.js             the screen picker and which frames are worth sending
 prompts/vision.md, eyes_nudge.md  what the eyes report; when what they saw is worth a word

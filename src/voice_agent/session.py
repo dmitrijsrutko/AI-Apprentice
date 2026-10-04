@@ -29,9 +29,10 @@ import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 
-from voice_agent import echo, timing, trace
+from voice_agent import echo, overtaken, timing, trace
 from voice_agent.channel import Channel
 from voice_agent.conversation import Conversation
+from voice_agent.errors import VoiceAgentError
 from voice_agent.events import (
     Announce,
     End,
@@ -40,6 +41,7 @@ from voice_agent.events import (
     FloorChanged,
     HoldOver,
     NewSession,
+    Overtaken,
     Partial,
     Playback,
     ResumeDue,
@@ -121,6 +123,7 @@ class Session:
         role: Role | None = None,
         thinker: LLM | None = None,
         thinker_prompt: str | None = None,
+        checker: LLM | None = None,
     ) -> None:
         """An empty `ladder` means the agent never speaks first. A `role` with
         a `thinker` engine gives the conversation an inner voice."""
@@ -133,6 +136,14 @@ class Session:
         self._turns: dict[asyncio.Task[None], Turn] = {}
         self._voice: Spoken | None = None
         """The agent's latest speech, which the user may still be hearing."""
+        self._quick = checker or thinker or engine
+        """What weighs whether the screen overtook the voice: its own engine
+        (`overtaken.ENGINES`), else the inner voice's, else the reply engine."""
+        self._weighing: asyncio.Task[None] | None = None
+        self._weigh_next: str | None = None
+        """A change seen while one was being weighed: weighed next, newest only."""
+        self._cut_for_screen: Spoken | None = None
+        """The voice already stopped for the screen: a line is cut once."""
         self._interrupts = 0
         self._answer: tuple[int, asyncio.Future[float | None]] | None = None
         """The interruption waiting to hear how much the browser played, by id,
@@ -243,6 +254,52 @@ class Session:
         if seen is not None and self.mic is not None:
             self.mic.active()
         self._initiative.notice(seen)
+        if seen is not None:
+            self._weigh(seen)
+
+    def _weigh(self, seen: str) -> None:
+        """While it is talking, ask whether the change makes the rest of what
+        it is saying wrong (`overtaken.py`). One at a time, the newest next."""
+        voice = self._voice
+        if voice is None or not voice.audible or voice is self._cut_for_screen:
+            return
+        if self._weighing is not None and not self._weighing.done():
+            self._weigh_next = seen
+            return
+        self._weighing = asyncio.create_task(self._weigh_voice(seen, voice))
+
+    async def _weigh_voice(self, seen: str, voice: Spoken) -> None:
+        try:
+            said, rest = overtaken.split(voice)
+            if len(rest) < overtaken.TAIL_CHARS:
+                return  # nearly done: let it finish
+            started = timing.now()
+            ask = overtaken.question(said, rest, seen, self.conversation.screen.now)
+            try:
+                with trace.span("voice.recheck", {"seen": seen}, trace_id=self.conversation.id):
+                    stop = await overtaken.stale(self._quick, ask)
+            except VoiceAgentError as exc:
+                logger.info("could not weigh the screen against the voice: %s", exc)
+                return
+            await self._channel.send_json(
+                {
+                    "type": "overtaken",
+                    "decision": "stop" if stop else "go",
+                    "seen": seen,
+                    "said": said,
+                    "ms": elapsed_ms(started),
+                }
+            )
+            if stop:
+                self.post(Overtaken(seen, voice))
+        except Exception:
+            # A defect must not leave the next change unweighed.
+            logger.exception("weighing the screen against the voice failed")
+        finally:
+            following, self._weigh_next = self._weigh_next, None
+            if following is not None and not self._closed:
+                self._weighing = None
+                self._weigh(following)
 
     def start(self) -> None:
         """Begin considering whether to speak; called once the greeting is out."""
@@ -306,6 +363,15 @@ class Session:
                     if interrupt:
                         await self.interrupt()
                     self._begin(Turn(None, line, after=self._settling), None, {"announced": True})
+            case Overtaken(seen, voice):
+                # Still the line that was weighed, still sounding: cut it where
+                # it was heard, as a barge-in would, and look again at once.
+                current = self._voice
+                ended = self.conversation.ended
+                if current is not None and current is voice and current.audible and not ended:
+                    self._cut_for_screen = current
+                    await self.interrupt()
+                    self._initiative.overtaken(seen)
             case HoldOver(hold):
                 await self._release_held(hold)
             case ResumeDue():
@@ -823,6 +889,11 @@ class Session:
                 queued.done.set_result(None)
         self._stop_holding()
         self._cancel_resume()
+        self._weigh_next = None
+        if self._weighing is not None:
+            self._weighing.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._weighing
         await self._initiative.stop()
         if self.mic is not None:
             await self.mic.stop(announce=False)

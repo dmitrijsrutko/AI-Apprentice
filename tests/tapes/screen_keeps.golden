@@ -1,0 +1,33 @@
+  0.000  >   greeting text='Hi.'
+  0.150  >   audio_end seconds=0.18 first_audio_ms=150
+  0.190  <   playback on
+  0.220  <   listen_start
+  0.220  >   listening active=True
+  0.390  <   playback off
+  1.056  >   floor state='speaking'
+  1.400  >   transcript text='which flights'
+  2.000  >   transcript text='which flights work'
+  2.592  >   floor state='micro_pause'
+  2.976  >   floor state='pause'
+  3.400  >   transcript final=True text='Which flights work?'
+  3.400  llm ask 'Which flights work?'
+  3.872  >   floor state='yielded'
+  4.090  <   playback on
+  4.590  >   reply_end ttft_ms=500 text='You are flying from Tallinn, so the morning airBaltic at si…'
+  4.590  >   audio_end seconds=7.38 first_audio_ms=650
+  6.000  <   seen 'Scrolled down the results list'
+  6.000  llm ask 'You are speaking aloud to someone who is working …'
+  6.530  >   overtaken decision='go' ms=530
+ 11.490  <   playback off
+ 11.520  >   mic_level
+ 14.150  llm ask '[This is not the other person speaking. It is wha…'
+ 14.680  >   initiative decision='declined'
+
+assistant: Hi.
+     user: Which flights work?
+assistant: You are flying from Tallinn, so the morning airBaltic at six ten is the obvious pick, and it lands in Berlin before eleven.
+
+what a judge would read:
+[00:00] ADVOCATE (spoke 0.2 s): "Hi."
+[00:01] YOU (answered after 0.7 s · spoke 1.3 s · 3 words): "Which flights work?"
+[00:04] ADVOCATE (spoke 7.4 s): "You are flying from Tallinn, so the morning airBaltic at six ten is the obvious pick, and it lands in Berlin before eleven."

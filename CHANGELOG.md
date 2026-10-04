@@ -15,6 +15,83 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 7 — The screen overtakes the voice: it stops itself when what it is saying went stale
+
+Until now only the user's voice (or typed text) could stop the agent. The
+screen could not: it read a change, wrote a 10–15 s line, and kept saying it
+while the user had already picked another flight. On the live server, **134
+of 269 spoken lines (50%)** had a reading with changes land while they were
+voiced (traces of 3–4 Oct). Some were real contradictions ("the From field
+still says Tallinn" as it changed to Riga), many were harmless (a scroll,
+"page loaded"). So the rest of a line is now weighed against each change that
+lands mid-speech. If it went stale, the agent cuts itself off at the last word
+heard, like a barge-in, and says something fresh about the screen as it is now.
+
+**What changed**
+- **`overtaken.py` (new) and `prompts/overtaken.md` (new):**
+  - `split` gives what was heard (`Spoken.heard`) and what is still to come.
+  - `question`/`stale` make one call that answers STOP or GO.
+  - The default is GO: a scroll, a load, or a change elsewhere is talked through.
+- **`session.py`:**
+  - `noticed` weighs a change while a voice is audible: one check at a time, the newest change next.
+  - No check runs within 25 characters of the line's end, and a line is cut once at most.
+  - The check runs on its own engine with thinking off: DeepSeek V4.1 Flash, or Sonnet 5.5 without a DeepSeek key (`overtaken.ENGINES`, `server.overtaken_engine`, warmed at startup).
+  - A STOP posts `Overtaken` (`events.py`), and `_handle` interrupts the voice if it is still that line and still sounding.
+  - The decision is reported to the page (`overtaken`).
+- **`llm/anthropic_provider.py`:** for the fallback, `effort="off"` is allowed for Sonnet 5.5 only (`THINKING_OFF`). It sends `thinking: {"type": "between_tools"}`, the API's word for off on that model: `disabled` is refused with a 400. Every other Claude model still refuses `off`.
+- **`initiative.py`:** `overtaken(seen)` considers the change at once, past the 15 s gap between screen lines and the 2 s pause, with "(you stopped yourself mid-sentence…)" in the nudge. `prompts/eyes_nudge.md` and `tutor_nudge.md` say to start fresh rather than finish the old sentence.
+- **Records:** `timeline.py`/`judge.py` record such a cut as "cut off by itself, as the screen changed". The page shows "✂ stopped itself — …" or "kept talking — …" (`web/telemetry.js`).
+- **Tests:** the tape harness has a `seen` verb, and there are two new tapes, `screen_overtakes` and `screen_keeps`. `tests/test_overtaken.py` was written first and failed on the old code.
+
+**Design decisions**
+- **A model weighs it, not a rule.** Cutting on every change would cut half
+  of all lines. One prompt fix came from a live miss: a question the change
+  has just answered is stale too.
+- **DeepSeek V4.1 Flash with thinking off.** Five cases from the traces, three
+  runs each, all four models called in turn under the same conditions, from
+  the Fly machine (iad, production) and from Riga:
+
+  | Check model | Right (Fly) | Median Fly | p90 Fly | Cold Fly | Right (Riga) | Median Riga | Tokens out |
+  |---|---|---|---|---|---|---|---|
+  | **DeepSeek V4.1 Flash, thinking off** | **15/15** | **816 ms** | **908 ms** | 1744 ms | 15/15 | 709 ms | 2 |
+  | Sonnet 5.5, thinking off | 15/15 | 1137 ms | 1188 ms | 1499 ms | 15/15 | 1281 ms | 5 |
+  | Sonnet 5.5, effort low | 15/15 | 1154 ms | 1181 ms | 1075 ms | 15/15 | 1245 ms | 5 |
+  | Haiku 4.5 | 15/15 | 485 ms | 536 ms | 530 ms | 14/15 | 580 ms | 5 |
+
+  Over every run made, including 25 more through the production adapter,
+  DeepSeek was wrong once in 55 (a scroll called STOP), Sonnet never in 70,
+  and Haiku 2 in 60. A wrong STOP cuts a true line mid-sentence, but the fresh
+  line follows. DeepSeek is ~0.4 s faster than Sonnet at about the same
+  certainty, so it leads. Sonnet with thinking off stays the fallback.
+  Thinking is off everywhere: the same accuracy as thinking low, and nothing
+  billed for reasoning.
+- **The cut reuses barge-in.** The history keeps only what was heard, and the
+  record says what was cut, so nothing downstream needs to know who cut it.
+- **Weighed only while audible.** What it is saying can be wrong; what it
+  has not started saying is the reply engine's, written with the newest
+  screen notes.
+
+**Latency impact** (tape, virtual time with a scripted 0.5 s check; the real
+check is ~1.2 s)
+- A screen change mid-line: the cut comes 0.5 s later, and the fresh line is
+  audible 2.0 s after the change. With the real check (~0.8 s on DeepSeek),
+  expect the cut at ~0.8 s and the line at ~2.3 s. Before, the stale line ran to its end
+  (11.5 s) and the fresh one came at 15.0 s.
+- One DeepSeek call per reading with changes during speech: by the traces,
+  about one per two lines, a few hundred tokens in and 2 out.
+
+**Deliberately not done**
+- Cutting at the end of the current sentence rather than at the word heard.
+- Weighing a reply before its first audio: a change that lands while it is
+  still being written is weighed only at the next change once it is audible.
+  (An unprompted screen line is covered: Chapter 3's supersede drops it.)
+
+**Verification**
+- `uv run verify` passes. The new tests failed before the fix and pass after.
+- The `screen_overtakes` golden was recorded on the old code (the stale line
+  played on) and re-recorded after. No other tape changed.
+- Not yet exercised in a live voice conversation.
+
 ## Chapter 6 — Sharper eyes: a close-up of what changed, and replies that wait for the screen
 
 The eyes misread small text. A 1080p screen shrunk to 1024 px leaves a date

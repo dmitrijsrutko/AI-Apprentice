@@ -100,7 +100,17 @@ class Announce:
     interrupt: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class Overtaken:
+    """The screen changed under what the agent is saying, and the rest of it
+    is wrong now (`overtaken.py`): stop `voice`, if it is still sounding."""
+
+    seen: str
+    voice: object
+    """The `Spoken` that was weighed: a later voice is not cut for it."""
+
+
 MicEvent = Partial | Final | NewSession | FloorChanged
 """What the microphone posts."""
 
-Event = MicEvent | Playback | Typed | Speak | HoldOver | ResumeDue | End | Announce
+Event = MicEvent | Playback | Typed | Speak | HoldOver | ResumeDue | End | Announce | Overtaken

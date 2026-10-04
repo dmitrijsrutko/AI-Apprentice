@@ -66,6 +66,16 @@ Haiku 4.5 rejects the parameter outright with a 400, so `_effort` asks the Model
 API and drops it for the models that have none."""
 
 
+THINKING_OFF = frozenset({"claude-sonnet-5-5"})
+"""The Claude models that can be asked not to think at all (`effort="off"`).
+Sonnet 5.5 takes `thinking: {"type": "between_tools"}` for it — `disabled`
+is refused with a 400 that names the replacement. Meant for a one-word
+decision (`overtaken.py`), where the leak described above cannot happen; a
+spoken reply keeps `low`."""
+
+THINKING_OFF_PARAM = {"thinking": {"type": "between_tools"}}
+
+
 CACHE_THROUGH_LAST: CacheControlEphemeralParam = {"type": "ephemeral"}
 """Passed top-level, which marks the last block of the request as a breakpoint.
 
@@ -100,10 +110,12 @@ class AnthropicLLM:
     ) -> None:
         self.provider = "anthropic"
         self.model = model or DEFAULT_MODEL
-        if effort == "off":
+        if effort == "off" and self.model not in THINKING_OFF:
             # At startup, not on the first turn: Haiku has no thinking to switch
             # off, and Opus 5.5 refuses to — `low` is the least there is.
-            raise ConfigError("no Claude option switches thinking off; ask for low")
+            raise ConfigError(
+                f"no Claude option switches thinking off for {self.model}; ask for low"
+            )
         self.effort = effort
         self.max_tokens = max_tokens
         """What this adapter was told to ask for. `None` is an instruction and
@@ -130,7 +142,7 @@ class AnthropicLLM:
             except AnthropicError as exc:
                 raise ProviderError(f"{self.provider} connect failed: {exc}") from exc
             self._supports_effort = bool(info.capabilities and info.capabilities.effort.supported)
-        if not self._supports_effort or self.effort is None:
+        if not self._supports_effort or self.effort is None or self.effort == "off":
             return omit
         return {"effort": self.effort}
 
@@ -144,7 +156,7 @@ class AnthropicLLM:
             effort = await self._effort()
             # What the model was actually asked for: `_effort` drops it for the
             # models that have none, and the report must not claim otherwise.
-            sent = None if effort is omit else self.effort
+            sent = self.effort if effort is not omit or self.effort == "off" else None
             # Only a turn whose startup connect failed looks the model up. A
             # connection it opened is this turn's cost; its request is not.
             call.restart()
@@ -155,6 +167,7 @@ class AnthropicLLM:
                 output_config=effort,
                 messages=to_anthropic_messages(messages),
                 cache_control=CACHE_THROUGH_LAST,
+                extra_body=THINKING_OFF_PARAM if self.effort == "off" else None,
             ) as stream:
                 if usage is not None:
                     call.fill(usage)

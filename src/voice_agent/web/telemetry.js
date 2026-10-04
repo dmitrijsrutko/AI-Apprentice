@@ -99,6 +99,13 @@ export function eyesLine(msg) {
   return msg.sharing ? `👁 sharing ${msg.surface} — the apprentice can see it` : "👁 not sharing — the apprentice can't see your screen";
 }
 
+// The screen changed while it was talking: whether the rest still held.
+export function overtakenLine(msg) {
+  return msg.decision === "stop"
+    ? `✂ stopped itself — the screen changed: ${msg.seen} · decided in ${ms(msg.ms)}`
+    : `👁 kept talking — the change leaves the rest true: ${msg.seen} · decided in ${ms(msg.ms)}`;
+}
+
 export function initiativeLine(msg) {
   if (msg.trigger === "screen") {
     const verdict = msg.decision === "failed"

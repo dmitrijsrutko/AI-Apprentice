@@ -1,0 +1,43 @@
+  0.000  >   greeting text='Hi.'
+  0.150  >   audio_end seconds=0.18 first_audio_ms=150
+  0.190  <   playback on
+  0.220  <   listen_start
+  0.220  >   listening active=True
+  0.390  <   playback off
+  1.056  >   floor state='speaking'
+  1.400  >   transcript text='which flights'
+  2.000  >   transcript text='which flights work'
+  2.592  >   floor state='micro_pause'
+  2.976  >   floor state='pause'
+  3.400  >   transcript final=True text='Which flights work?'
+  3.400  llm ask 'Which flights work?'
+  3.872  >   floor state='yielded'
+  4.090  <   playback on
+  4.590  >   reply_end ttft_ms=500 text='You are flying from Tallinn, so the morning airBaltic at si…'
+  4.590  >   audio_end seconds=7.38 first_audio_ms=650
+  6.000  <   seen 'From field changed from Tallinn to Riga'
+  6.000  llm ask 'You are speaking aloud to someone who is working …'
+  6.530  >   overtaken decision='stop' ms=530
+  6.530  >   interrupt id=1
+  6.550  <   playback off (cut)
+  6.550  <   interrupted 1 played 2460ms
+  6.550  >   truncated played_ms=2460 heard_chars=35 chars=123
+  6.560  >   mic_level
+  7.150  llm ask '[This is not the other person speaking. It is wha…'
+  7.830  >   initiative decision='spoke' line='Riga now. Why fly from Riga?'
+  7.830  >   reply_end text='Riga now. Why fly from Riga?'
+  7.980  >   audio_end seconds=1.68 first_audio_ms=150
+  8.020  <   playback on
+  9.720  <   playback off
+  9.728  >   mic_level
+
+assistant: Hi.
+     user: Which flights work?
+assistant: You are flying from Tallinn, so the
+assistant: Riga now. Why fly from Riga?
+
+what a judge would read:
+[00:00] ADVOCATE (spoke 0.2 s): "Hi."
+[00:01] YOU (answered after 0.7 s · spoke 1.3 s · 3 words): "Which flights work?"
+[00:04] ADVOCATE (cut off by itself, as the screen changed, after 2.5 s of 7.4 s): "You are flying from Tallinn, so the morning airBaltic at six ten is the obvious pick, and it lands in Berlin before eleven."
+[00:08] ADVOCATE (spoke 1.7 s): "Riga now. Why fly from Riga?"

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  audioLine, committedLine, echoLine, gapsLine, initiativeLine, ms, quietLine, replyLines,
+  audioLine, committedLine, echoLine, gapsLine, initiativeLine, ms, overtakenLine, quietLine, replyLines,
   thoughtLine, truncatedLine,
 } from "../../src/voice_agent/web/telemetry.js";
 
@@ -126,4 +126,10 @@ test("words with no voice behind them are not called the agent's own voice", () 
   assert.equal(phantom, "🔇 words with no voice behind them (“네.”) — not an interruption");
   const own = echoLine({ type: "echo_ignored", stage: "final", text: "Riga is the capital." });
   assert.equal(own, "🔁 heard its own voice (“Riga is the capital.”) — not answered");
+});
+
+test("a line the screen overtook says it stopped itself, and why", () => {
+  const seen = "From field changed from Tallinn to Riga";
+  assert.match(overtakenLine({ decision: "stop", seen, ms: 530 }), /^✂ stopped itself — the screen changed: From field/);
+  assert.match(overtakenLine({ decision: "go", seen: "Scrolled down", ms: 480 }), /kept talking/);
 });

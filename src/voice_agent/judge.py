@@ -105,7 +105,8 @@ def describe(turn: Turn) -> str:
     if turn.who == "advocate":
         if turn.cut is not None:
             whole = f" of {turn.of:.1f} s" if turn.of else ""
-            heard = f"cut off by YOU after {turn.cut:.1f} s{whole}"
+            who = "itself, as the screen changed," if turn.cut_by_screen else "YOU"
+            heard = f"cut off by {who} after {turn.cut:.1f} s{whole}"
         elif turn.spoken is not None:
             heard = f"spoke {about}{turn.spoken:.1f} s"
         else:

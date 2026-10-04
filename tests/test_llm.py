@@ -375,3 +375,24 @@ async def test_no_effort_means_nothing_is_sent_even_where_it_is_supported() -> N
 
     assert [call["output_config"] for call in calls] == [omit]
     assert llm.effort is None
+
+
+async def test_sonnet_5_5_is_asked_not_to_think_in_the_way_it_accepts() -> None:
+    """`thinking: disabled` is refused with a 400 on this model; `between_tools`
+    is its word for off, and no effort goes with it."""
+    calls: list[dict[str, Any]] = []
+    final = SimpleNamespace(
+        input_tokens=1, output_tokens=1, cache_read_input_tokens=0, cache_creation_input_tokens=0
+    )
+
+    def stream(**kwargs: Any) -> FakeAnthropicStream:
+        calls.append(kwargs)
+        return FakeAnthropicStream(["GO"], final)
+
+    client = SimpleNamespace(messages=SimpleNamespace(stream=stream), models=models(effort=True))
+    llm = AnthropicLLM("claude-sonnet-5-5", "off", client=client)  # type: ignore[arg-type]
+
+    [_ async for _ in llm.stream("s", CONVERSATION, Usage())]
+
+    assert calls[0]["extra_body"] == {"thinking": {"type": "between_tools"}}
+    assert calls[0]["output_config"] is omit

@@ -198,6 +198,9 @@ class Initiative:
         """Counts what the eyes noticed: a screen decision overtaken by a newer
         change is not spoken."""
         self._superseded = False
+        self._at_once = False
+        """The news is why it just stopped itself mid-sentence: said without
+        waiting for a pause, which the cut itself just made."""
         self.teaching = False
         """Tutoring a new hire: what the eyes see is checked against the Work
         Map at once (`TEACH_*`), and a breach is said even mid-task."""
@@ -226,6 +229,7 @@ class Initiative:
     def reset(self) -> None:
         """The user said something, so the budget is theirs again."""
         self._rung = 0
+        self._at_once = False  # whatever it stopped itself for, they have moved on
 
     def notice(self, seen: str | None) -> None:
         """The eyes saw something change. Considered at the next tick that
@@ -236,9 +240,19 @@ class Initiative:
         working on a shared screen is not leaving a silence to fill, and
         "I'll be quiet now" in the middle of their task is exactly wrong."""
         self._news = seen
+        self._at_once = False  # a newer change is ordinary news, pause and all
         if seen is not None:
             self._seen_version += 1
             self._rung = len(self._ladder)
+
+    def overtaken(self, seen: str) -> None:
+        """It just stopped itself because the screen changed under what it was
+        saying (`overtaken.py`): consider the change at once, not after the
+        gap between screen lines, and say so in the nudge."""
+        self.notice(f"(you stopped yourself mid-sentence because this changed) {seen}")
+        self._screen_at = None
+        self._superseded = False
+        self._at_once = True
 
     async def _run(self) -> None:
         while True:
@@ -270,7 +284,8 @@ class Initiative:
     async def _screen(self) -> bool:
         """Consider what the eyes saw, if the moment allows. Whether it did."""
         quiet = self._quiet()
-        least = TEACH_QUIET_SECONDS if self.teaching else SCREEN_QUIET_SECONDS
+        at_once = self.teaching or self._at_once
+        least = TEACH_QUIET_SECONDS if at_once else SCREEN_QUIET_SECONDS
         gap = TEACH_GAP_SECONDS if self.teaching else SCREEN_GAP_SECONDS
         if quiet is None or quiet < least:
             return False
@@ -279,6 +294,7 @@ class Initiative:
             return False
         seen, self._news = self._news or "", None
         self._screen_at = now
+        self._at_once = False
         nudge = screen_nudge(seen, quiet, self.teaching)
         await self._consider(-1, None, quiet, nudge=nudge, seen=seen)
         return True

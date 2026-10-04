@@ -327,6 +327,8 @@ def test_thinking_off_is_refused_where_there_is_no_switch() -> None:
 def test_no_claude_option_may_switch_thinking_off() -> None:
     with pytest.raises(ConfigError, match="no Claude option switches thinking off"):
         AnthropicLLM("m", effort="off")
+    with pytest.raises(ConfigError, match="no Claude option switches thinking off"):
+        AnthropicLLM("claude-opus-5-5", effort="off")
 
 
 async def test_a_provider_that_has_no_such_parameter_is_not_sent_it() -> None:

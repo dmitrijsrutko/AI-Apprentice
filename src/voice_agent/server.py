@@ -38,7 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
 
-from voice_agent import admin, judge, prompts, roles, timing, trace, vad
+from voice_agent import admin, judge, overtaken, prompts, roles, timing, trace, vad
 from voice_agent.backends import Backends
 from voice_agent.channel import Channel, page_event
 from voice_agent.config import DEFAULT_GREETING, Settings, build_prompt, load_settings
@@ -138,6 +138,19 @@ def load_roles(preselected: str) -> dict[str, roles.Role]:
     if preselected != roles.NO_ROLE and preselected not in cards:
         roles.load(preselected)  # raises, naming the cards there are
     return cards
+
+
+def overtaken_engine() -> LLM | None:
+    """The engine that weighs a screen change against what is being said, with
+    thinking off: the first of `overtaken.ENGINES` whose key is set. With none,
+    the session falls back to the inner voice's engine or its own."""
+    for provider, model in overtaken.ENGINES:
+        try:
+            return Traced(create_llm(provider, model, "off", max_tokens=overtaken.MAX_TOKENS))
+        except ConfigError as exc:
+            logger.info("screen changes are not weighed by %s: %s", model, exc)
+    logger.warning("screen changes will be weighed by the reply engine")
+    return None
 
 
 def thinker_engine(cards: dict[str, roles.Role]) -> LLM | None:
@@ -263,6 +276,8 @@ class Agent:
     record_dir: Path | None
     rulings: asyncio.Semaphore | None = None
     """How many rulings may run at once: `MAX_LIVE`, or no cap without one."""
+    checker: LLM | None = None
+    """Weighs a screen change against what is being said (`overtaken.py`)."""
     ready: bool = False
     """The engines are connected; `/healthz` waits on it."""
     started_at: datetime = field(default_factory=datetime.now)
@@ -386,6 +401,7 @@ def create_app(
         roles=cards,
         thinker=inner,
         thinker_prompts={slug: system_prompt(card) for slug, card in cards.items()},
+        checker=overtaken_engine() if llm is None else None,
         record_dir=(sessions_dir or settings.sessions) if record else None,
         rulings=asyncio.Semaphore(settings.max_live) if settings.max_live else None,
     )
@@ -399,6 +415,7 @@ def create_app(
             asyncio.to_thread(vad.load),
             *(connect(backends.engine(choice.name)) for choice in backends.menu),
             *([connect(agent.thinker)] if agent.thinker is not None else []),
+            *([connect(agent.checker)] if agent.checker is not None else []),
         )
         agent.ready = True
         yield
@@ -585,6 +602,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
         role=role,
         thinker=agent.thinker if role is not None else None,
         thinker_prompt=agent.thinker_prompts.get(role_name),
+        checker=agent.checker,
     )
     eyes = (
         Eyes(

@@ -17,7 +17,8 @@ import {
 import { progress, renderRuling } from "./verdict.js";
 import { chosenEars, servedFacts, showStart, stackQuery } from "./start.js";
 import {
-  audioLine, committedLine, echoLine, eyesLine, gapsLine, initiativeLine, quietLine, seenLine,
+  audioLine, committedLine, echoLine, eyesLine, gapsLine, initiativeLine, overtakenLine, quietLine,
+  seenLine,
   thoughtLine, truncatedLine,
 } from "./telemetry.js";
 import { declined, endLines, review } from "./review.js";
@@ -560,6 +561,8 @@ const handlers = {
   initiative(msg) { add(initiativeLine(msg), "note think thought"); },
 
   seen(msg) { addSeen(seenLine(msg), msg.screen); },
+
+  overtaken(msg) { add(overtakenLine(msg), "note think thought"); },
 
   eyes(msg) { addSeen(eyesLine(msg)); },
 
