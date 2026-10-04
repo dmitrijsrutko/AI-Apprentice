@@ -31,8 +31,13 @@ logger = logging.getLogger(__name__)
 class Speculation:
     """One in-flight guess at the reply, and the fragments it has produced."""
 
-    def __init__(self, engine: LLM, system: str, history: Sequence[Message], text: str) -> None:
+    def __init__(
+        self, engine: LLM, system: str, history: Sequence[Message], text: str, seen: int = 0
+    ) -> None:
         self.text = text
+        self.seen = seen
+        """How many glimpses of the screen its history held: a guess made
+        before a newer one answers a screen that is gone."""
         self.chars = 0
         self.usage = Usage()
         """Filled in as the guess finishes; a turn that adopts it reports this."""
@@ -110,10 +115,10 @@ class Speculator:
         """Guess from here on as another part (`Session.become`)."""
         self._system = system
 
-    def on_settled(self, stable: str, history: Sequence[Message]) -> None:
+    def on_settled(self, stable: str, history: Sequence[Message], seen: int = 0) -> None:
         """The recognizer found nothing new: bet that the speaker has stopped."""
         if self._guess is None:
-            self._guess = Speculation(self._engine, self._system, history, stable)
+            self._guess = Speculation(self._engine, self._system, history, stable, seen)
 
     async def abandon(self) -> None:
         """Drop a guess the recognizer has just proved premature."""

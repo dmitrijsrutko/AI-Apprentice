@@ -12,16 +12,25 @@
 // brings back a frame sent lately is a blink, and is not sent again. A bigger
 // change is always sent, a change back included — a value set, changed and
 // set back must be seen as set back.
+//
+// A small change also sends a close-up: the changed area at the screen's own
+// resolution, as PNG. The whole frame is shrunk to MAX_WIDTH, where small text
+// blurs; the close-up is what values are read from (scripts/eyes_eval.py).
 
 export const THUMB_W = 256;
 export const THUMB_H = 144;
-export const MAX_WIDTH = 1024;  // ~790 image tokens: read faster than 1280's ~1,230
-export const QUALITY = 0.6;
+export const MAX_WIDTH = 1024;  // ~790 image tokens; with a close-up, 1280 read no better
+export const QUALITY = 0.85;  // 0.6 smudged small digits into misreads
 export const LEVEL = 16;  // a grey step this big is a change, not compression noise
 export const MIN_CELLS = 2;
 export const RECENT = 4;  // a caret's two states, and room for a toggle's
 export const CARET_W = 2;  // cells: a caret is a thin bar, at most this wide…
 export const CARET_H = 4;  // …and this tall
+export const CROP_PAD = 4;  // cells around the change, ~30 px of a 1080p screen
+export const CROP_MIN_W = 64;  // cells: a quarter of the screen's width…
+export const CROP_MIN_H = 32;  // …and a fifth of its height, so a value comes with its label
+export const CROP_MAX_SHARE = 0.4;  // past this a change is a new page: the whole frame says it
+export const CROP_MAX_EDGE = 1568;  // px: the model shrinks anything longer anyway
 
 // How many cells' grey values moved by more than `level` between two
 // thumbnails of equal size; every cell when there is nothing to compare with.
@@ -35,9 +44,10 @@ export function changedCells(previous, current, level = LEVEL) {
   return moved;
 }
 
-// The box around the cells that differ, as [width, height] in cells; null when
-// none differ.
-export function changedBox(previous, current, level = LEVEL) {
+// The rectangle around the cells that differ, as {x, y, w, h} in cells; null
+// when none differ (or there is nothing to compare with).
+export function changedRect(previous, current, level = LEVEL) {
+  if (!previous || previous.length !== current.length) return null;
   let left = THUMB_W, right = -1, top = THUMB_H, bottom = -1;
   for (let i = 0; i < current.length; i++) {
     if (Math.abs(current[i] - previous[i]) <= level) continue;
@@ -47,7 +57,42 @@ export function changedBox(previous, current, level = LEVEL) {
     if (y < top) top = y;
     if (y > bottom) bottom = y;
   }
-  return right < 0 ? null : [right - left + 1, bottom - top + 1];
+  return right < 0 ? null : { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+}
+
+// The same, as [width, height] in cells.
+export function changedBox(previous, current, level = LEVEL) {
+  const rect = changedRect(previous, current, level);
+  return rect && [rect.w, rect.h];
+}
+
+// Widen [lo, hi) to at least `least`, inside [0, limit).
+function grow(lo, hi, least, limit) {
+  if (hi - lo >= least) return [lo, hi];
+  lo = Math.max(0, lo - Math.floor((least - (hi - lo)) / 2));
+  hi = Math.min(limit, lo + least);
+  return [Math.max(0, hi - least), hi];
+}
+
+// The close-up of a change `rect` (cells) on a `width` x `height` screen, as
+// {x, y, w, h} in the screen's pixels; null when the change is too big for one.
+// Mirrored in scripts/eyes_eval.py: what the eval measures is what is sent.
+export function cropRect(rect, width, height) {
+  if (!rect) return null;
+  const [x0, x1] = grow(Math.max(0, rect.x - CROP_PAD), Math.min(THUMB_W, rect.x + rect.w + CROP_PAD),
+    CROP_MIN_W, THUMB_W);
+  const [y0, y1] = grow(Math.max(0, rect.y - CROP_PAD), Math.min(THUMB_H, rect.y + rect.h + CROP_PAD),
+    CROP_MIN_H, THUMB_H);
+  if ((x1 - x0) * (y1 - y0) > CROP_MAX_SHARE * THUMB_W * THUMB_H) return null;
+  const sx = width / THUMB_W, sy = height / THUMB_H;
+  const x = Math.round(x0 * sx), y = Math.round(y0 * sy);
+  return { x, y, w: Math.round(x1 * sx) - x, h: Math.round(y1 * sy) - y };
+}
+
+// The size a close-up of `box` is sent at: its own, unless longer than the cap.
+export function cropSize(box) {
+  const scale = Math.min(1, CROP_MAX_EDGE / Math.max(box.w, box.h));
+  return [Math.round(box.w * scale), Math.round(box.h * scale)];
 }
 
 // Whether `current` is worth sending, given the `recent` frames sent (newest
@@ -90,6 +135,7 @@ export function createEyes({ send, onChange, share, frame, interval = 1, minCell
   thumbCtx.imageSmoothingEnabled = true;
   thumbCtx.imageSmoothingQuality = "high";
   const full = document.createElement("canvas");
+  const close = document.createElement("canvas");
 
   // `forced`: the server asked for the screen as it is now (the user started
   // speaking), so any change at all is worth sending; an identical frame is not.
@@ -106,8 +152,15 @@ export function createEyes({ send, onChange, share, frame, interval = 1, minCell
     full.getContext("2d").drawImage(video, 0, 0, full.width, full.height);
     const jpeg = full.toDataURL("image/jpeg", QUALITY).split(",", 2)[1];
     if (!jpeg) return;
+    const box = cropRect(changedRect(last, now), video.videoWidth, video.videoHeight);
+    let crop = null;
+    if (box) {
+      [close.width, close.height] = cropSize(box);
+      close.getContext("2d").drawImage(video, box.x, box.y, box.w, box.h, 0, 0, close.width, close.height);
+      crop = close.toDataURL("image/png").split(",", 2)[1] || null;
+    }
     sent = [...sent, now].slice(-RECENT);
-    send(frame(jpeg, changed));
+    send(frame(jpeg, changed, crop));
   }
 
   function stop(tell = true) {

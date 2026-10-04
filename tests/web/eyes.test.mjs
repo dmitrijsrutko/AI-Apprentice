@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  MIN_CELLS, THUMB_H, THUMB_W, changedCells, grey, isNew,
+  CROP_MAX_EDGE, MIN_CELLS, THUMB_H, THUMB_W, changedCells, changedRect, cropRect, cropSize, grey,
+  isNew,
 } from "../../src/voice_agent/web/eyes.js";
 
 const blank = (value = 200) => new Uint8Array(THUMB_W * THUMB_H).fill(value);
@@ -60,4 +61,32 @@ test("a deleted character is seen as deleted", () => {
 test("RGBA pixels become one grey byte each", () => {
   const rgba = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]);
   assert.deepEqual([...grey(rgba)], [255, 0]);
+});
+
+test("a changed price gets a close-up with room for its label, in screen pixels", () => {
+  const rect = changedRect(blank(), with_([[100, 50], [103, 51]]));
+  assert.deepEqual(rect, { x: 100, y: 50, w: 4, h: 2 });
+
+  const box = cropRect(rect, 1920, 1080);
+
+  assert.equal(box.w, 480, "grown to a quarter of the width (64 cells of 7.5 px)");
+  assert.equal(box.h, 240, "and a fifth of the height (32 cells)");
+  assert.ok(box.x <= 100 * 7.5 && box.x + box.w >= 104 * 7.5, "the change is inside");
+});
+
+test("a close-up never leaves the screen", () => {
+  const box = cropRect({ x: 254, y: 142, w: 2, h: 2 }, 1920, 1080);
+
+  assert.equal(box.x + box.w, 1920);
+  assert.equal(box.y + box.h, 1080);
+});
+
+test("a new page gets no close-up: the whole frame says it", () => {
+  assert.equal(cropRect({ x: 0, y: 0, w: 200, h: 100 }, 1920, 1080), null);
+  assert.equal(changedRect(null, blank()), null, "nothing to compare with");
+});
+
+test("a Retina close-up is shrunk only past the model's own limit", () => {
+  assert.deepEqual(cropSize({ w: 1155, h: 600 }), [1155, 600]);
+  assert.deepEqual(cropSize({ w: 3136, h: 800 }), [CROP_MAX_EDGE, 400]);
 });

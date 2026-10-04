@@ -210,6 +210,9 @@ class Session:
         self.looking: Callable[[], Awaitable[None]] | None = None
         """Asks the eyes for the screen as it is now (`Eyes.request`), when
         there are eyes: set by the server, called when the user starts speaking."""
+        self.fresh_screen: Callable[[], Awaitable[int]] | None = None
+        """Waits, briefly, for that look to be read (`Eyes.fresh`), so the reply
+        answers the screen they spoke about; ms waited."""
         self._initiative = Initiative(
             engine,
             system_prompt,
@@ -357,7 +360,7 @@ class Session:
         if not self._agent_busy():
             # Not while a reply is running, audible or being cut: the history
             # the guess would answer is about to change.
-            self._speculator.on_settled(stable, history)
+            self._speculator.on_settled(stable, history, len(self.conversation.seen))
 
     async def _on_floor(self, state: str) -> None:
         """The user's floor, for the inner voice. Not while the agent's own
@@ -702,6 +705,11 @@ class Session:
                 if turn.after is not None:
                     # After the answer it interrupted has been cut to what was heard.
                     await asyncio.wait({turn.after})
+                # Before it starts: talked over while waiting, it is a question
+                # to record, not a reply to cancel.
+                fresh = self.fresh_screen if turn.text is not None else None
+                if fresh is not None and (waited := await fresh()):
+                    report["screen_wait_ms"] = waited
                 if turn.interrupted:
                     # Overtaken before it began: the question is kept, the
                     # answer is not wanted. An unprompted line just never happened.
@@ -709,6 +717,12 @@ class Session:
                         self.conversation.add_user(turn.text)
                     return
                 turn.started = True
+                if claimed is not None and claimed.seen < len(self.conversation.seen):
+                    # Guessed before the screen they asked about was read.
+                    await claimed.abandon()
+                    claimed = None
+                    report["speculated"] = False
+                    report["speculation_stale_screen"] = True
                 kind = "turn.unprompted" if turn.text is None else "turn"
                 if claimed is not None:
                     fragments = claimed.stream()  # a guess made before the question ended

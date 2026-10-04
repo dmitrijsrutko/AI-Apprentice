@@ -600,6 +600,7 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
     )
     if eyes is not None:
         session.looking = eyes.request
+        session.fresh_screen = eyes.fresh
     mapper_name = (
         agent.backends.mapper_for(conversation, websocket.query_params)
         if role is not None and role.mapped
@@ -791,8 +792,23 @@ def client_note(kind: str, payload: dict[str, object]) -> str:
 
 
 MAX_FRAME_CHARS = 2_000_000
-"""A shared screen's frame, as base64: a 1280-wide JPEG at quality 0.7 is
-60-300 KB, so this refuses only what is not a frame from our page."""
+"""A shared screen's frame, as base64: a 1024-wide JPEG at quality 0.85 is
+45-300 KB, so this refuses only what is not a frame from our page."""
+
+MAX_CROP_CHARS = 6_000_000
+"""Its close-up, as base64 PNG: lossless at up to 1568 px, so a busy one runs
+to a few MB."""
+
+
+def close_up(data: object) -> bytes | None:
+    """A frame's close-up, or `None`: one that is not ours costs the close-up,
+    never the frame."""
+    if not isinstance(data, str) or not data or len(data) > MAX_CROP_CHARS:
+        return None
+    try:
+        return base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        return None
 
 
 async def handle_text(
@@ -877,7 +893,7 @@ async def handle_text(
             jpeg = base64.b64decode(data, validate=True)
         except (binascii.Error, ValueError):
             return
-        eyes.frame(jpeg)
+        eyes.frame(jpeg, close_up(payload.get("crop")))
         return
 
     if kind in ("client", "client_error"):

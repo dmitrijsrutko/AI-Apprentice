@@ -11,9 +11,10 @@ module except in the request itself; nothing here keeps it.
 import base64
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from anthropic import AnthropicError, AsyncAnthropic, DefaultAsyncHttpxClient
+from anthropic.types import ImageBlockParam, TextBlockParam
 from json_repair import repair_json
 
 from voice_agent import prompts, timing
@@ -76,9 +77,10 @@ class Seen:
 class Vision(Protocol):
     model: str
 
-    async def look(self, jpeg: bytes, previous: str) -> Seen:
+    async def look(self, jpeg: bytes, previous: str, crop: bytes | None = None) -> Seen:
         """Describe `jpeg` against `previous`, the last `Seen.screen` (empty
-        when sharing has just started). Raises `ProviderError`."""
+        when sharing has just started). `crop`: the area that changed, at the
+        screen's own resolution, to read values from. Raises `ProviderError`."""
         ...
 
 
@@ -92,6 +94,26 @@ def require_env_or_none(name: str) -> str | None:
         return require_env(name)
     except Exception:
         return None
+
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+CLOSE_UP = (
+    "The second image is a close-up, at the screen's full resolution, of the area that "
+    "changed: read every value in that area from it."
+)
+
+
+def image(data: bytes) -> ImageBlockParam:
+    """One image block. The page sends the whole screen as JPEG and a close-up
+    as PNG: lossless, because JPEG smudges the edges of small digits."""
+    kind: Literal["image/png", "image/jpeg"] = (
+        "image/png" if data.startswith(PNG_SIGNATURE) else "image/jpeg"
+    )
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": kind, "data": base64.b64encode(data).decode()},
+    }
 
 
 def parse(text: str, ms: int, model: str) -> Seen:
@@ -129,7 +151,7 @@ class AnthropicVision:
             http_client=http_client(DefaultAsyncHttpxClient),
         )
 
-    async def look(self, jpeg: bytes, previous: str) -> Seen:
+    async def look(self, jpeg: bytes, previous: str, crop: bytes | None = None) -> Seen:
         started = timing.now()
         before = (
             f"{previous.strip()} (it may contain misreadings — read every value again "
@@ -137,6 +159,10 @@ class AnthropicVision:
             if previous.strip()
             else "nothing: sharing has just started, this is the first frame"
         )
+        content: list[ImageBlockParam | TextBlockParam] = [image(jpeg)]
+        if crop:
+            content += [image(crop), {"type": "text", "text": CLOSE_UP}]
+        content.append({"type": "text", "text": f"The previous screen was: {before}"})
         extra: dict[str, Any] = {}
         if self._effort is not None:
             extra["output_config"] = {"effort": self._effort}
@@ -148,17 +174,7 @@ class AnthropicVision:
                 messages=[
                     {
                         "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/jpeg",
-                                    "data": base64.b64encode(jpeg).decode("ascii"),
-                                },
-                            },
-                            {"type": "text", "text": f"The previous screen was: {before}"},
-                        ],
+                        "content": content,
                     }
                 ],
                 **extra,

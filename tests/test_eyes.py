@@ -4,11 +4,14 @@ reaching the conversation's context — never the image itself."""
 import asyncio
 import base64
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import FakeLLM
+from voice_agent import eyes as eyes_module
+from voice_agent import timing
 from voice_agent.conversation import Conversation
 from voice_agent.eyes import Eyes
 from voice_agent.llm.vision import Seen, parse
@@ -28,12 +31,14 @@ class FakeVision:
         self.events = events
         self.read: list[bytes] = []
         self.previous: list[str] = []
+        self.crops: list[bytes | None] = []
         self.started = asyncio.Event()
         self.finished: asyncio.Queue[bytes] = asyncio.Queue()
         self.delays: dict[bytes, float] = {}
 
-    async def look(self, jpeg: bytes, previous: str) -> Seen:
+    async def look(self, jpeg: bytes, previous: str, crop: bytes | None = None) -> Seen:
         self.read.append(jpeg)
+        self.crops.append(crop)
         self.previous.append(previous)
         self.started.set()
         await asyncio.sleep(self.delays.get(jpeg, self.delay))
@@ -282,7 +287,6 @@ async def test_stopping_the_share_drops_what_was_not_yet_spoken_about() -> None:
 async def test_two_readings_overlap_once_the_first_has_run_a_while(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from voice_agent import eyes as eyes_module
 
     monkeypatch.setattr(eyes_module, "STAGGER_SECONDS", 0.05)
     vision = FakeVision(delay=0.3)
@@ -304,7 +308,6 @@ async def test_two_readings_overlap_once_the_first_has_run_a_while(
 async def test_a_reading_overtaken_by_a_newer_one_is_dropped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from voice_agent import eyes as eyes_module
 
     monkeypatch.setattr(eyes_module, "STAGGER_SECONDS", 0.0)
     conversation = Conversation(id="t", eyes="haiku-4-5")
@@ -400,3 +403,174 @@ async def test_the_agent_s_own_voice_does_not_make_the_eyes_look() -> None:
 
     assert asked == []
     await session.close()
+
+
+async def test_a_small_change_is_read_with_its_close_up_and_only_the_frame_is_kept(
+    tmp_path: Path,
+) -> None:
+    vision, page = FakeVision(), Page()
+    eyes = Eyes(vision, Conversation(id="t"), page, frames_dir=tmp_path)
+    await eyes.share(True, "browser", "")
+
+    eyes.frame(b"1", b"\x89PNG close-up")
+    await settle(vision, 1)
+
+    assert vision.crops == [b"\x89PNG close-up"]
+    assert [f["crop"] for f in page.frames if f["type"] == "seen"] == [True]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["g1.jpg"]  # noqa: ASYNC240
+    await eyes.close()
+
+
+def test_a_close_up_is_sent_as_a_second_png_image() -> None:
+    from voice_agent.llm.vision import image
+
+    def kind(data: bytes) -> object:
+        source: dict[str, object] = dict(image(data)["source"])
+        return source["media_type"]
+
+    assert kind(b"\x89PNG\r\n\x1a\nrest") == "image/png"
+    assert kind(b"\xff\xd8jpeg") == "image/jpeg"
+
+
+async def test_a_glimpse_is_placed_when_its_frame_arrived_not_when_it_was_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(timing, "now", lambda: clock[0])
+
+    class Slow(FakeVision):
+        async def look(self, jpeg: bytes, previous: str, crop: bytes | None = None) -> Seen:
+            clock[0] += 5.0  # a slow reading
+            return await super().look(jpeg, previous, crop)
+
+    conversation = Conversation(id="t")
+    vision = Slow()
+    eyes = Eyes(vision, conversation, Page())
+    await eyes.share(True, "browser", "")
+    eyes.frame(b"1")
+    await settle(vision, 1)
+
+    assert conversation.seen[0].clock == "0:00", "not 0:05, when the reading came back"
+    await eyes.close()
+
+
+async def test_a_reply_waits_for_the_screen_its_speaker_started_talking_about() -> None:
+    conversation = Conversation(id="t")
+    vision = FakeVision(delay=0.1)
+    eyes = Eyes(vision, conversation, Page())
+    await eyes.share(True, "browser", "")
+    assert await eyes.fresh() == 0, "no look: nothing to wait for"
+
+    await eyes.request()
+    eyes.frame(b"1")  # the page's answer to the look
+    waited = await eyes.fresh()
+
+    assert waited >= 50 and conversation.screen.now == "screen 1"
+    assert await eyes.fresh() == 0, "read already"
+    await eyes.close()
+
+
+async def test_the_wait_for_the_screen_is_short(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(eyes_module, "FRESH_WAIT_SECONDS", 0.05)
+    conversation = Conversation(id="t")
+    eyes = Eyes(FakeVision(delay=1.0), conversation, Page())
+    await eyes.share(True, "browser", "")
+
+    await eyes.request()
+    eyes.frame(b"1")
+    waited = await eyes.fresh()
+
+    assert 40 <= waited < 500 and conversation.screen.now == ""
+    await eyes.close()
+
+
+async def test_a_frame_long_after_the_look_is_not_its_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(eyes_module, "LOOK_ANSWER_SECONDS", 0.0)
+    eyes = Eyes(FakeVision(delay=1.0), Conversation(id="t"), Page())
+    await eyes.share(True, "browser", "")
+
+    await eyes.request()  # the screen had not changed: the page sent nothing
+    await asyncio.sleep(0.01)
+    eyes.frame(b"1")  # an ordinary change, later
+
+    assert await eyes.fresh() == 0
+    await eyes.close()
+
+
+async def test_a_guess_made_before_the_screen_was_read_is_not_said() -> None:
+    from tests.test_mic import RecordingChannel
+    from voice_agent.conversation import Glimpse
+    from voice_agent.session import Session
+    from voice_agent.speculation import Speculation
+    from voice_agent.turn import Turn
+
+    conversation = Conversation(id="t")
+    llm = FakeLLM(["The 16th, Friday."])
+    session = Session(
+        RecordingChannel(),  # type: ignore[arg-type]
+        conversation,
+        llm,
+        None,
+        "system",
+        None,
+        (),
+    )
+    guess = Speculation(FakeLLM(["The 14th."]), "system", [], "which date is this", seen=0)
+
+    async def read() -> int:
+        conversation.seen.append(Glimpse(None, "0:03", "Flights", ("opened itinerary",), id="g1"))
+        return 900
+
+    session.fresh_screen = read
+    session._begin(Turn("which date is this"), guess, {"speculated": True})
+    await asyncio.sleep(0.2)
+
+    assert conversation.messages[-1].content.strip() == "The 16th, Friday."
+    assert llm.seen, "answered afresh, with the screen in its context"
+    await session.close()
+
+
+async def test_a_question_interrupted_while_the_screen_is_read_is_kept() -> None:
+    from tests.test_mic import RecordingChannel
+    from voice_agent.session import Session
+    from voice_agent.turn import Turn
+
+    conversation = Conversation(id="t")
+    session = Session(
+        RecordingChannel(),  # type: ignore[arg-type]
+        conversation,
+        FakeLLM(["Sure."]),
+        None,
+        "system",
+        None,
+        (),
+    )
+
+    async def read() -> int:
+        await asyncio.sleep(0.3)
+        return 300
+
+    session.fresh_screen = read
+    session._begin(Turn("which date is this"), None, {})
+    await asyncio.sleep(0.05)
+    await session.interrupt()  # they speak again while the screen is being read
+    await asyncio.sleep(0.4)
+
+    assert [m.content for m in conversation.messages if m.role == "user"] == ["which date is this"]
+    await session.close()
+
+
+def test_a_bad_close_up_still_reads_the_frame(client: TestClient) -> None:
+    key = client.get("/", follow_redirects=False).headers["location"].removeprefix("/c/")
+    with client.websocket_connect(f"/ws/{key}?eyes=sonnet-5-5") as socket:
+        while socket.receive_json()["type"] != "greeting":
+            pass
+        socket.send_text(json.dumps({"type": "share", "active": True, "surface": "browser"}))
+        assert socket.receive_json()["type"] == "eyes"
+        jpeg = base64.b64encode(b"frame").decode()
+        socket.send_text(json.dumps({"type": "frame", "jpeg": jpeg, "crop": "!!"}))
+        seen = socket.receive_json()
+
+        assert seen["type"] == "seen" and seen["crop"] is False

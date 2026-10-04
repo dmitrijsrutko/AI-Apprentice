@@ -38,6 +38,9 @@ Rules:
   may itself contain misreadings. Never copy a date, number, price, time or
   name from it: read each one again here, and where they differ, the image
   wins.
+- When a second image is given, it is a close-up of the area that changed, at
+  the screen's full resolution. Read every value in that area from the
+  close-up; use the whole screen only to know where it is (app, page, layout).
 - Small text, digits and dates are easy to misread (16, 18 and 10 look alike
   when small): read them carefully. If a value is too small to read with
   certainty, write it as unclear ("date unclear") rather than guess.

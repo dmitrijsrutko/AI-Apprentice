@@ -1,0 +1,87 @@
+<!doctype html>
+<!-- The eyes' eval: a flight-results page drawn like a real one (small grey
+     text, dense rows). `?a` is the list; `?b` is the same list with one
+     itinerary opened — the change the eyes must read. Synthetic: no personal data. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; font: 12px/1.35 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #161616; background: #eff3f8; }
+  header { background: #05203c; color: #fff; padding: 10px 24px; display: flex; gap: 18px; align-items: center; }
+  header b { font-size: 16px; }
+  .search { display: flex; gap: 8px; }
+  .field { background: #fff; color: #161616; border-radius: 4px; padding: 5px 9px; min-width: 150px; }
+  .field small { display: block; color: #626971; font-size: 10px; }
+  main { display: grid; grid-template-columns: 250px 1fr 300px; gap: 18px; padding: 16px 24px; }
+  aside, .ad { background: #fff; border-radius: 6px; padding: 12px; }
+  aside h4 { margin: 10px 0 4px; font-size: 12px; }
+  aside label { display: block; color: #3a3f45; }
+  .row { background: #fff; border-radius: 6px; padding: 9px 14px; margin-bottom: 7px; display: grid; grid-template-columns: 90px 1fr 120px; align-items: center; }
+  .row .times { font-size: 13px; font-weight: 600; }
+  .row .meta { color: #626971; font-size: 11px; }
+  .row .price { text-align: right; font-size: 15px; font-weight: 700; }
+  .row .price small { display: block; font-size: 10px; font-weight: 400; color: #626971; }
+  .sort { display: flex; gap: 6px; margin-bottom: 8px; }
+  .sort span { background: #fff; border-radius: 4px; padding: 6px 10px; flex: 1; }
+  .sort .on { outline: 2px solid #0062e3; }
+  #detail { display: none; position: absolute; left: 820px; top: 230px; width: 470px; background: #fff;
+            border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.25); padding: 14px 16px; }
+  body.b #detail { display: block; }
+  #detail h3 { margin: 0 0 2px; font-size: 14px; }
+  #detail .leg { display: grid; grid-template-columns: 70px 1fr; gap: 2px 8px; margin: 8px 0; }
+  #detail .leg .t { font-weight: 600; }
+  #detail .leg .s { color: #626971; font-size: 11px; }
+  #detail .warn { background: #fff4e5; color: #8a4b00; border-radius: 4px; padding: 6px 8px; font-size: 11px; margin: 6px 0; }
+  #detail .total { display: flex; justify-content: space-between; border-top: 1px solid #e0e4e9; padding-top: 8px; margin-top: 8px; }
+  #detail .total b { font-size: 16px; }
+  #detail .fare { color: #626971; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <b>Flights</b>
+  <div class="search">
+    <div class="field"><small>From</small>Tallinn (TLL)</div>
+    <div class="field"><small>To</small>Berlin Brandenburg (BER)</div>
+    <div class="field"><small>Depart</small>Wed, 14 Oct</div>
+    <div class="field"><small>Return</small>Mon, 19 Oct</div>
+    <div class="field"><small>Travellers</small>1 adult, Economy</div>
+  </div>
+</header>
+<main>
+  <aside>
+    <h4>Stops</h4>
+    <label>☐ Direct &nbsp; from €214</label>
+    <label>☑ 1 stop &nbsp; from €163</label>
+    <label>☐ 2+ stops &nbsp; from €141</label>
+    <h4>Departure times</h4>
+    <label>Outbound 06:00 – 23:59</label>
+    <h4>Journey duration</h4>
+    <label>2.0 hours – 31.5 hours</label>
+    <h4>Airlines</h4>
+    <label>☑ airBaltic</label><label>☑ Finnair</label><label>☑ LOT</label><label>☑ SAS</label>
+  </aside>
+  <section>
+    <div class="sort"><span class="on">Best<br><b>€186</b> · 4h 35</span><span>Cheapest<br><b>€141</b> · 9h 20</span><span>Fastest<br><b>€214</b> · 2h 00</span></div>
+    <div class="row"><div><b>airBaltic</b></div><div><div class="times">06:10 – 10:45</div><div class="meta">TLL – BER · 1 stop RIX · 4h 35</div></div><div class="price">€186<small>€372 total</small></div></div>
+    <div class="row"><div><b>Finnair</b></div><div><div class="times">07:25 – 11:50</div><div class="meta">TLL – BER · 1 stop HEL · 5h 25</div></div><div class="price">€203<small>€406 total</small></div></div>
+    <div class="row"><div><b>LOT</b></div><div><div class="times">09:40 – 15:15</div><div class="meta">TLL – BER · 1 stop WAW · 6h 35</div></div><div class="price">€177<small>€354 total</small></div></div>
+    <div class="row"><div><b>SAS</b></div><div><div class="times">11:05 – 16:30</div><div class="meta">TLL – BER · 1 stop ARN · 6h 25</div></div><div class="price">€231<small>€462 total</small></div></div>
+    <div class="row"><div><b>airBaltic</b></div><div><div class="times">13:20 – 18:05</div><div class="meta">TLL – BER · 1 stop RIX · 5h 45</div></div><div class="price">€163<small>€326 total</small></div></div>
+    <div class="row"><div><b>Finnair</b></div><div><div class="times">16:15 – 20:40</div><div class="meta">TLL – BER · 1 stop HEL · 5h 25</div></div><div class="price">€198<small>€396 total</small></div></div>
+    <div class="row"><div><b>LOT</b></div><div><div class="times">18:50 – 23:55</div><div class="meta">TLL – BER · 1 stop WAW · 6h 05</div></div><div class="price">€169<small>€338 total</small></div></div>
+  </section>
+  <div class="ad"><b>Price alerts</b><p class="meta">Track prices for Tallinn – Berlin. We'll tell you when they change.</p></div>
+</main>
+<div id="detail">
+  <h3>Tallinn → Berlin · airBaltic BT 315 / BT 211</h3>
+  <div class="fare">Fri, 16 Oct · 1 stop · Self-transfer in Riga</div>
+  <div class="leg"><span class="t">06:10</span><span>Tallinn TLL</span><span class="t">07:05</span><span>Riga RIX <span class="s">· 55 min flight</span></span></div>
+  <div class="warn">⚠ Self-transfer: 50 min to collect bags and check in again in Riga (RIX)</div>
+  <div class="leg"><span class="t">07:55</span><span>Riga RIX</span><span class="t">10:45</span><span>Berlin BER <span class="s">· arrives Fri, 16 Oct</span></span></div>
+  <div class="fare">Cabin bag included · Checked bag 23 kg €38 · Fare Basic, non-refundable</div>
+  <div class="total"><span>Total, 1 adult, return Mon, 19 Oct</span><b>€1,186</b></div>
+</div>
+<script>if (location.search.includes("b")) document.body.classList.add("b");</script>
+</body>
+</html>

@@ -15,6 +15,93 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 6 — Sharper eyes: a close-up of what changed, and replies that wait for the screen
+
+The eyes misread small text. A 1080p screen shrunk to 1024 px leaves a date
+about 7 px tall, and JPEG at 0.6 smudges its digits: Haiku read "Fri, 16 Oct"
+as 18 or 10. This chapter measures before changing anything. It then sends
+each small change twice: the whole screen for context, and a close-up of the
+changed area at the screen's own resolution, which values are read from.
+Separately, a reply now waits for the screen its question is about.
+
+**What changed**
+- `scripts/eyes_eval.py` and `scripts/eyes_eval/flights.html` (new): a
+  ground-truth flight page, rendered by headless Chrome at 1920×1080 and at 2×
+  (Retina). It is read through the real vision call in 6 ways, scored on 10
+  values (dates, times, flight numbers, the total, a 50 min transfer), and
+  counts misreads. The table is in `docs/eyes-eval.md`. Pillow is a dev
+  dependency, for the eval only.
+- `web/eyes.js`:
+  - `changedRect` gives where the change is.
+  - `cropRect`/`cropSize` give the close-up: the change padded by 4 cells,
+    grown to at least a quarter of the width and a fifth of the height (so a
+    value comes with its label), none past 40% of the screen (a new page), and
+    at most 1568 px long.
+  - Frames are 1024 px JPEG at **0.85** (was 0.6), with the close-up as PNG.
+- `llm/vision.py`: the close-up is a second image block, and the media type is
+  sniffed from the bytes. `prompts/vision.md`: read values in the changed area
+  from the close-up.
+- `eyes.py`:
+  - Frames carry their close-up and arrival time.
+  - A glimpse is placed when its frame arrived, not when its reading came back
+    (~3 s later), so map steps link to the right moment.
+  - `fresh()` is new (see "Replies wait" below).
+  - The seen line shows 🔍.
+- `session.py` and `speculation.py`: a user's turn awaits `fresh_screen`. A
+  guess made with fewer glimpses than now exist is abandoned and the reply is
+  generated afresh. The turn report gains `screen_wait_ms` and
+  `speculation_stale_screen`.
+
+**Design decisions**
+- **Close-up, not a bigger frame.** On the eval, 1280 px lifted Haiku only to
+  6–8 of 10, still misreading 16 Oct. With the close-up it read 10/10 at
+  1024 px, and 1280 added nothing. PNG for the close-up only: lossless where
+  digits are read, while the full frame stays a small JPEG (tokens follow
+  pixels, not bytes).
+- **One call with two images**, not a crop instead of the frame: without the
+  frame the model loses which page and app it is on.
+- **Sonnet stays the default** (the user's call). Haiku with close-ups matched
+  it on this page, so switching back is one measurement away on real screens.
+- **Replies wait only for the look the speaker started**, with a 1.5 s cap.
+  Waiting for every frame in flight would delay every reply while the screen
+  keeps changing. A look's frame arrives as they begin to speak, so its
+  reading is usually done or nearly done by the commit. The wait comes before
+  the turn starts, so being talked over in it records the question rather
+  than cancelling it.
+- **Any glimpse newer than a guess voids it**, not only the look's: the screen
+  in its context is gone. Someone who talks while clicking loses the guess's
+  head start, not the right answer.
+
+**Latency impact** (measured, `docs/eyes-eval.md`, Sonnet medians)
+- A reading is 3.0–3.6 s, with or without the close-up. The close-up adds
+  +270 tokens at 1×, +960 at 2×, and 45–120 KB per frame on the socket.
+- A reply that answers a screen being read waits up to 1.5 s (`screen_wait_ms`
+  in its report). Otherwise it waits 0 ms. Not yet measured live.
+
+**Deliberately not done**
+- DOM events from a demo page: there is no demo page, and vision serves any
+  screen.
+- Several close-ups for scattered changes: the union rectangle, or the whole
+  frame past 40%.
+- Blurring the stored screenshots: stated as a limitation in the README.
+- A close-up covers the change since the frame the page last sent. When the
+  server replaces a waiting frame, the replaced change is read from the
+  1024 px frame alone. This only happens in bursts faster than readings.
+- The PNG is encoded on the page's main thread (`toDataURL`): tens of ms for a
+  big Retina close-up, at most once a second. An async `toBlob` if it ever
+  shows.
+- Lowering Sonnet's token cap or effort: not measured this chapter.
+
+**Verification**
+- `uv run verify` passes. New tests cover:
+  - the crop rule;
+  - the close-up as a second PNG image;
+  - glimpse time;
+  - `fresh()` waiting, with its cap and the late-frame case;
+  - a stale guess not being said.
+- The eval was run twice (~$0.50 each) with the same picture.
+- The page's close-up was not exercised in a live browser share this session.
+
 ## Chapter 5 — Teach: the apprentice becomes the tutor
 
 Module 3 of the brief. Once the map is final, **Start teaching** hands the

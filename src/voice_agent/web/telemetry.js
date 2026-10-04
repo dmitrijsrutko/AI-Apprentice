@@ -90,7 +90,8 @@ export function seenLine(msg) {
   const where = msg.app ? ` — ${msg.app}` : "";
   const cost = msg.input_tokens ? ` · ${msg.input_tokens} in, ${msg.output_tokens} out` : "";
   const model = msg.model ? ` · ${String(msg.model).replace("claude-", "")}` : "";
-  return `👁 ${msg.at ?? ""} ${what}${where} · read in ${ms(msg.ms)}${model}${cost}`;
+  const close = msg.crop ? " · 🔍 close-up" : "";
+  return `👁 ${msg.at ?? ""} ${what}${where} · read in ${ms(msg.ms)}${close}${model}${cost}`;
 }
 
 // Sharing started, switched or stopped.
