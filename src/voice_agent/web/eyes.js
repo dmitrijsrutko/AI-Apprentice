@@ -32,6 +32,29 @@ export const CROP_MIN_H = 32;  // …and a fifth of its height, so a value comes
 export const CROP_MAX_SHARE = 0.4;  // past this a change is a new page: the whole frame says it
 export const CROP_MAX_EDGE = 1568;  // px: the model shrinks anything longer anyway
 
+// What is asked of the screen capture. Two frames a second, as the sampler
+// reads one: 5 fps of a Retina window was decoded for nothing, on the machine
+// whose microphone must keep up. Capped in size for the same reason; the
+// close-up still comes from more pixels than the 1024 px frame.
+export const CAPTURE = {
+  video: { frameRate: 2, width: { max: 2560 }, height: { max: 1600 } },
+  audio: false,
+};
+
+// A canvas as base64 PNG, encoded by `toBlob`: asynchronous, off the main
+// thread where the browser can, unlike `toDataURL`.
+export function pngBase64(canvas) {
+  return new Promise((resolve) => canvas.toBlob(async (blob) => {
+    if (!blob) { resolve(null); return; }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let text = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    resolve(btoa(text));
+  }, "image/png"));
+}
+
 // How many cells' grey values moved by more than `level` between two
 // thumbnails of equal size; every cell when there is nothing to compare with.
 // Pure, so node tests it.
@@ -139,8 +162,10 @@ export function createEyes({ send, onChange, share, frame, interval = 1, minCell
 
   // `forced`: the server asked for the screen as it is now (the user started
   // speaking), so any change at all is worth sending; an identical frame is not.
-  function look(forced = false) {
-    if (!video || video.readyState < 2 || !video.videoWidth) return;
+  let busy = false;  // a close-up still being encoded: the next look waits its turn
+
+  async function look(forced = false) {
+    if (busy || !video || video.readyState < 2 || !video.videoWidth) return;
     thumbCtx.drawImage(video, 0, 0, THUMB_W, THUMB_H);
     const now = grey(thumbCtx.getImageData(0, 0, THUMB_W, THUMB_H).data);
     const last = sent.at(-1) ?? null;
@@ -153,12 +178,19 @@ export function createEyes({ send, onChange, share, frame, interval = 1, minCell
     const jpeg = full.toDataURL("image/jpeg", QUALITY).split(",", 2)[1];
     if (!jpeg) return;
     const box = cropRect(changedRect(last, now), video.videoWidth, video.videoHeight);
+    const from = stream;
     let crop = null;
     if (box) {
       [close.width, close.height] = cropSize(box);
       close.getContext("2d").drawImage(video, box.x, box.y, box.w, box.h, 0, 0, close.width, close.height);
-      crop = close.toDataURL("image/png").split(",", 2)[1] || null;
+      busy = true;
+      try {
+        crop = await pngBase64(close);
+      } finally {
+        busy = false;
+      }
     }
+    if (!stream || stream !== from) return;  // stopped or switched while it was encoded
     sent = [...sent, now].slice(-RECENT);
     send(frame(jpeg, changed, crop));
   }
@@ -177,7 +209,7 @@ export function createEyes({ send, onChange, share, frame, interval = 1, minCell
 
   async function start() {
     // Asked inside the click: the browser shows its picker only for a gesture.
-    const next = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: false });
+    const next = await navigator.mediaDevices.getDisplayMedia(CAPTURE);
     if (stream) stop(false);  // a new pick replaces the old one, as one switch
     stream = next;
     const [track] = stream.getVideoTracks();
@@ -191,8 +223,8 @@ export function createEyes({ send, onChange, share, frame, interval = 1, minCell
     await video.play().catch(() => {});
     send(share(true, surface, track.label));
     onChange(true, track.label || surface);
-    timer = setInterval(() => look(), Math.max(0.25, interval) * 1000);
-    setTimeout(() => look(), 300);  // the first frame at once, not after a whole interval
+    timer = setInterval(() => look().catch(() => {}), Math.max(0.25, interval) * 1000);
+    setTimeout(() => look().catch(() => {}), 300);  // the first frame at once, not after a whole interval
   }
 
   return {
@@ -200,5 +232,6 @@ export function createEyes({ send, onChange, share, frame, interval = 1, minCell
     stop: () => { if (stream) stop(); },
     isSharing: () => stream !== null,
     lookNow: () => look(true),
+    size: () => (video ? `${video.videoWidth}x${video.videoHeight}` : ""),
   };
 }

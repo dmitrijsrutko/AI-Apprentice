@@ -62,6 +62,7 @@ BROWSER_GLOBALS = {
     "Float32Array",
     "Uint8Array",
     "encodeURIComponent",
+    "btoa",
     "Map",
     "WeakMap",
     "Int16Array",

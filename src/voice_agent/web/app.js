@@ -5,14 +5,14 @@ import { createAwake, screenLine, screenNote, worthRecording } from "./awake.js"
 import { canShare, createEyes } from "./eyes.js";
 import { progress as mapProgress, renderMap, renderMastery } from "./workmap.js";
 import { paintFloor, record as recordFloor } from "./floor.js";
-import { buildMic, micFailure } from "./mic.js";
+import { buildMic, createMeter, micFailure, micLabel, trackFacts } from "./mic.js";
 import { WARN_MS, countdown } from "./timer.js";
 import { addMarks, spokenChars } from "./karaoke.js";
 import { createPlayer } from "./player.js";
 import { clientFacts } from "./client.js";
 import {
   clientError, clientInfo, endRound, interrupted, listenStart, listenStop, mapStep, phase,
-  playback, screenFrame, share, userMessage,
+  micStats, playback, screenFrame, share, userMessage,
 } from "./protocol.js";
 import { progress, renderRuling } from "./verdict.js";
 import { chosenEars, servedFacts, showStart, stackQuery } from "./start.js";
@@ -237,11 +237,68 @@ const player = createPlayer({
   },
 });
 
+const meter = createMeter();
+const MIC_STATS_MS = 2000;
+
 function sendFrame(pcm) {
   // Full duplex: sent while the agent talks too, so the user can talk over it.
   // The browser's echo cancellation (requested in mic.js) is what keeps the
   // agent's own voice out of these frames.
-  if (listening && sending()) ws.send(pcm.buffer);
+  if (listening && sending()) {
+    meter.add(pcm, performance.now());
+    ws.send(pcm.buffer);
+  }
+}
+
+setInterval(() => {
+  if (!listening || !sending()) return;
+  const sharing = Boolean(eyes?.isSharing());
+  ws.send(micStats({
+    ...meter.take(), ...trackFacts(mic), sharing, capture: sharing ? eyes.size() : "",
+  }));
+}, MIC_STATS_MS);
+
+// Chrome on macOS was heard to hand over a microphone no listener could hear
+// speech in once a screen capture began, for the whole share or ~30 s of it
+// (Opera, same page, was fine). A fresh capture graph, opened after the capture
+// has started, makes the browser set its voice processing up again for the new
+// state of the machine. Old one first: a second track on a live device would
+// share its processing rather than rebuild it.
+const REOPEN_AFTER_MS = 600;
+let reopening = false;
+
+async function reopenMic() {
+  if (!mic || reopening) return;
+  reopening = true;
+  const rate = mic.rate ?? sampleRate;
+  try {
+    mic.stream.getTracks().forEach((t) => t.stop());
+    mic.context.close();
+    mic = { ...(await buildMic(rate, sendFrame)), rate };
+    await mic.context.resume();
+    showMic();
+  } catch (err) {
+    mic = null;  // closed above: the listen button opens a new one
+    micFailed(err);
+  } finally {
+    reopening = false;
+  }
+}
+
+// Which microphone is listening, in the log, once and whenever it changes: an
+// iPhone answering over Continuity, not the laptop's own, was what a deaf
+// Chrome turned out to be using. Shown here only; the trace gets its kind.
+let micShown = "";
+function showMic() {
+  const label = micLabel(mic);
+  if (!label || label === micShown) return;
+  micShown = label;
+  add(`🎙 listening through: ${label}`, "note");
+}
+
+function sharingChanged(sharing, surface) {
+  paintShare(sharing, surface);
+  if (sharing && mic) setTimeout(reopenMic, REOPEN_AFTER_MS);
 }
 
 function connect() {
@@ -448,7 +505,7 @@ const handlers = {
     if (msg.eyes && msg.eyes_model && canShare() && !eyes) {
       eyes = createEyes({
         send: (m) => { if (sending()) ws.send(m); },
-        onChange: paintShare,
+        onChange: sharingChanged,
         share,
         frame: screenFrame,
         interval: msg.eyes.interval,
@@ -782,11 +839,13 @@ endButton.onclick = () => {
 // can never run before one has arrived — which is why starting to listen is
 // triggered there rather than in the click that opened the socket.
 async function beginListening() {
+  if (reopening) return;  // the microphone is being replaced this moment
   listen.disabled = true;
   try {
     player.resume();  // a gesture: the one moment autoplay is allowed
     if (!mic) mic = await buildMic(sampleRate, sendFrame);
     await mic.context.resume();
+    showMic();
     ws.send(listenStart());
   } catch (err) {
     // In the log, not the status line: `paintListening` repaints that on every
@@ -831,6 +890,7 @@ begin.onclick = async () => {
   if (opening) {
     try {
       mic = { ...(await opening), rate };
+      showMic();
     } catch (err) {
       micRefused = true;
       micFailed(err);

@@ -169,6 +169,16 @@ def test_frames_traced_elsewhere_or_bulky_are_left_out(traced: Any) -> None:
     assert "history" not in written[0] and written[0]["history_messages"] == 2
 
 
+def test_a_screen_frame_and_its_close_up_are_traced_by_size_never_by_content(
+    traced: Any,
+) -> None:
+    page_event("in", {"type": "frame", "jpeg": "/9j/abc", "crop": "iVBORw0KGgo", "changed": 4})
+
+    written = next(w for w in lines(traced) if w["kind"] == "page.in")
+    assert written["jpeg_chars"] == 7 and written["crop_chars"] == 11
+    assert "jpeg" not in written and "crop" not in written
+
+
 class ThoughtOnly(FakeLLM):
     """Thinks, then answers nothing: what DeepSeek did to an echoed turn."""
 

@@ -24,8 +24,9 @@ machine: DeepSeek V4.1 Flash 15/15 at a 0.82 s median, Sonnet 5.5 15/15 at
 wrong once in 55 and Sonnet never in 70: the faster one at about the same
 certainty first, Sonnet behind it for a deployment without a DeepSeek key."""
 
-MAX_TOKENS = 16
-"""One word, STOP or GO."""
+MAX_TOKENS = 48
+"""GO, or STOP with the claim that is now false: naming it is what keeps the
+model from stopping on a change that leaves the line true."""
 
 SYSTEM = "You decide one thing for a voice assistant and answer with one word."
 
@@ -46,21 +47,34 @@ def split(voice: Spoken) -> tuple[str, str]:
     return heard, rest.strip()
 
 
-def question(said: str, rest: str, seen: str, screen: str) -> str:
+def question(said: str, rest: str, seen: str, screen: str, asked: str = "") -> str:
+    """`asked`: what the user had just said, when the line is a reply to it —
+    a line reading their own words back is not made wrong by the screen."""
+    answering = f'You are answering what they just said: "{asked}"\n' if asked.strip() else ""
     return (
         prompts.load("overtaken")
         .replace("{said}", said[-SAID_CHARS:])
         .replace("{rest}", rest)
+        .replace("{asked}\n", answering)
         .replace("{seen}", seen)
         .replace("{screen}", screen or "(no description)")
     )
 
 
-async def stale(engine: LLM, ask: str, usage: Usage | None = None) -> bool:
-    """Whether the rest should not be said: the model's STOP. Anything else,
-    a failure included, is GO — finishing a line is the safe default."""
+def verdict(reply: str) -> tuple[bool, str]:
+    """The model's STOP and the false claim it named, or GO. Anything but a
+    leading STOP is GO — finishing a line is the safe default."""
+    text = reply.strip()
+    if not text.upper().startswith("STOP"):
+        return False, ""
+    return True, text[4:].lstrip(" :—-").strip()
+
+
+async def stale(engine: LLM, ask: str, usage: Usage | None = None) -> tuple[bool, str]:
+    """Whether the rest should not be said, and why. A failure raises: the
+    caller lets the line finish."""
     fragments: list[str] = []
     async with closing(engine.stream(SYSTEM, [Message("user", ask)], usage)) as stream:
         async for fragment in stream:
             fragments.append(fragment)
-    return "".join(fragments).strip().upper().startswith("STOP")
+    return verdict("".join(fragments))

@@ -144,6 +144,10 @@ class Session:
         """A change seen while one was being weighed: weighed next, newest only."""
         self._cut_for_screen: Spoken | None = None
         """The voice already stopped for the screen: a line is cut once."""
+        self._voice_asked = ""
+        """What the user said that the current voice answers; empty for a line
+        the agent started itself. A reply reading their words back is not
+        made wrong by the screen catching up with them."""
         self._interrupts = 0
         self._answer: tuple[int, asyncio.Future[float | None]] | None = None
         """The interruption waiting to hear how much the browser played, by id,
@@ -274,10 +278,11 @@ class Session:
             if len(rest) < overtaken.TAIL_CHARS:
                 return  # nearly done: let it finish
             started = timing.now()
-            ask = overtaken.question(said, rest, seen, self.conversation.screen.now)
+            asked = self._voice_asked if voice is self._voice else ""
+            ask = overtaken.question(said, rest, seen, self.conversation.screen.now, asked)
             try:
                 with trace.span("voice.recheck", {"seen": seen}, trace_id=self.conversation.id):
-                    stop = await overtaken.stale(self._quick, ask)
+                    stop, why = await overtaken.stale(self._quick, ask)
             except VoiceAgentError as exc:
                 logger.info("could not weigh the screen against the voice: %s", exc)
                 return
@@ -287,6 +292,7 @@ class Session:
                     "decision": "stop" if stop else "go",
                     "seen": seen,
                     "said": said,
+                    "why": why,
                     "ms": elapsed_ms(started),
                 }
             )
@@ -752,6 +758,7 @@ class Session:
 
     def _begin(self, turn: Turn, claimed: Speculation | None, report: dict[str, object]) -> None:
         self._voice = turn.voice
+        self._voice_asked = turn.text or ""
         task = asyncio.create_task(self._take_turn(turn, claimed, report))
         self._turns[task] = turn
         task.add_done_callback(self._forget_turn)

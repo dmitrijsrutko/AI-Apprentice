@@ -32,6 +32,10 @@ export const clientError = (what, err) =>
 export const share = (active, surface = "", label = "") =>
   JSON.stringify({ type: "share", active, surface, label });
 
+// What the microphone delivered over the last span, and its device's own
+// account of itself (`mic.js`): flat scalars, as the server traces them.
+export const micStats = (stats) => JSON.stringify({ type: "mic_stats", ...stats });
+
 // `crop`: the changed area at full resolution, as base64 PNG, or null.
 export const screenFrame = (jpeg, changed, crop = null) =>
   JSON.stringify({ type: "frame", jpeg, changed, ...(crop ? { crop } : {}) });

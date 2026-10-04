@@ -102,7 +102,7 @@ export function eyesLine(msg) {
 // The screen changed while it was talking: whether the rest still held.
 export function overtakenLine(msg) {
   return msg.decision === "stop"
-    ? `✂ stopped itself — the screen changed: ${msg.seen} · decided in ${ms(msg.ms)}`
+    ? `✂ stopped itself — ${msg.why || "the screen changed"}: ${msg.seen} · decided in ${ms(msg.ms)}`
     : `👁 kept talking — the change leaves the rest true: ${msg.seen} · decided in ${ms(msg.ms)}`;
 }
 

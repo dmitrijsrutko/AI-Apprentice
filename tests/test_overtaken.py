@@ -183,3 +183,22 @@ async def test_closing_while_weighing_starts_nothing_more() -> None:
     await asyncio.sleep(0.4)
 
     assert len(checker.seen) == 1, "a check started after the session closed"
+
+
+def test_a_reply_is_weighed_with_the_words_it_answers() -> None:
+    from voice_agent.overtaken import question
+
+    reply = question("Got", "it — out on the sixteenth.", "Return date set", "", "On the 16th.")
+    unprompted = question("Skyscanner", "for the flights?", "Page loaded", "")
+
+    assert 'You are answering what they just said: "On the 16th."' in reply
+    assert "You are answering" not in unprompted and "{asked}" not in unprompted
+
+
+def test_a_stop_names_the_claim_and_anything_else_lets_the_line_finish() -> None:
+    from voice_agent.overtaken import verdict
+
+    assert verdict("STOP: says Tallinn; it is now Riga") == (True, "says Tallinn; it is now Riga")
+    assert verdict("STOP") == (True, "")
+    assert verdict("GO") == (False, "")
+    assert verdict("I think it is fine") == (False, "")

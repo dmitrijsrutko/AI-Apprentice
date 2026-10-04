@@ -92,6 +92,22 @@ check is ~1.2 s)
   played on) and re-recorded after. No other tape changed.
 - Not yet exercised in a live voice conversation.
 
+**Fixes**
+- Chrome went deaf while a screen was shared. In three sessions it heard 0 sentences during the share, while Opera heard every one. The mic was found to be an iPhone over macOS Continuity, clipping at 0 dBFS. The page now:
+  - reopens the mic 0.6 s after a share starts;
+  - captures at 2 fps and up to 2560×1600, with the close-up PNG encoded off the main thread;
+  - reports `mic_stats` every 2 s (the level, the gaps, the processing applied, the device's kind but never its name);
+  - shows which mic is listening.
+
+  The next Chrome session heard 8 sentences while sharing. About 12 s after the share starts is still deaf. Screen close-ups are now traced by size only.
+- The self-cut cut true lines: both cuts in a live session stopped a line the change agreed with ("Got it — out on the sixteenth…" as the return date was set). The check now:
+  - stops only on a claim that is now false, which it must name (`STOP: …`, shown on the page);
+  - treats moving on, loading, scrolls and hovers as GO, and "why" questions stay valid;
+  - receives the user's own words when the line is a reply.
+
+  On 10 anonymised live cases × 3 (`scripts/overtaken_eval.py`, `docs/overtaken-eval.md`): before, 18/30 right with 12 wrong STOPs; after, 29/30 with 0 wrong STOPs (one missed STOP), 0.75 s median.
+- Review fixes. A failed mic reopen leaves no closed mic behind, and a listen click mid-reopen waits. A screen frame counts as sent only once sent, never for a share that stopped or switched while its close-up was encoded.
+
 ## Chapter 6 — Sharper eyes: a close-up of what changed, and replies that wait for the screen
 
 The eyes misread small text. A 1080p screen shrunk to 1024 px leaves a date

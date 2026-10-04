@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  CROP_MAX_EDGE, MIN_CELLS, THUMB_H, THUMB_W, changedCells, changedRect, cropRect, cropSize, grey,
+  CAPTURE, CROP_MAX_EDGE, MIN_CELLS, THUMB_H, THUMB_W, changedCells, changedRect, cropRect, cropSize, grey,
   isNew,
 } from "../../src/voice_agent/web/eyes.js";
 
@@ -89,4 +89,10 @@ test("a new page gets no close-up: the whole frame says it", () => {
 test("a Retina close-up is shrunk only past the model's own limit", () => {
   assert.deepEqual(cropSize({ w: 1155, h: 600 }), [1155, 600]);
   assert.deepEqual(cropSize({ w: 3136, h: 800 }), [CROP_MAX_EDGE, 400]);
+});
+
+test("the capture asks for no more than the sampler reads", () => {
+  assert.equal(CAPTURE.audio, false);
+  assert.ok(CAPTURE.video.frameRate <= 2);
+  assert.ok(CAPTURE.video.width.max <= 2560 && CAPTURE.video.height.max <= 1600);
 });
