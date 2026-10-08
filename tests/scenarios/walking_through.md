@@ -1,6 +1,6 @@
 role: ai_apprentice
 
-Partner: Hi, I'm your apprentice. Pick a task you do often and walk me through it, as if I'm taking it over next month. What's the task?
+Partner: Hi, I'm your apprentice. Pick a task you do often and show me how you do it, as if I'm taking it over next month. If you share your screen with the share button at the top, I can follow along as you work. What's the task?
 User: I book flights for my boss. | {clean} Let's say Tallinn to Stockholm for a meeting. | {clean}
 Partner: Good. Where do you start?
 User: I open the flight search, | {clean} put in the cities and the date, | {clean} and search. | {clean}

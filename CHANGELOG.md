@@ -15,6 +15,45 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 9 — The apprentice asks to see: screen sharing invited, not assumed
+
+The apprentice learns best by watching, but nothing told a newcomer it could
+see. Its opening never mentioned sharing, and the role card treated a shared
+screen as something that might happen. A user could talk through a whole task
+without finding the 🖥 share button. Now the apprentice expects the screen: it
+says so in its welcome and invites sharing once. It accepts a "no", and asks
+again only when something on screen matters. Prompts only; no code.
+
+**What changed**
+- **`prompts/roles/ai_apprentice.md`:**
+  - The opening adds one sentence: "If you share your screen with the share button at the top, I can follow along as you work."
+  - Job: watching is the expected way of working. If they are not sharing when they name the task, invite them once, warmly, naming the button.
+  - When speaking: that reply *is* the invite, the turn's one question.
+  - After a "no", ask again only when an on-screen value matters to a decision. A few words of thanks when sharing starts.
+  - Worth it / Not worth it: an uninvited screen task is worth a word; a repeated invite is not.
+- **`prompts/tutor.md`:** teaching starts by asking the new hire to share, if they are not sharing yet.
+- **`tests/scenarios/walking_through.md`:** opens with the new greeting.
+
+**Design decisions**
+- **Invite once, then only when needed.** The other options were once only, or at every screen moment. A user who declines gets no nagging, but a decision that hinges on what is on screen still gets a "could you share it, or tell me what it says?".
+- **The invite is the turn's question.** With the rule in Job alone, DeepSeek acknowledged the task and asked a task question instead (0 of 1). Stated in When speaking as this turn's one question, it invited every time.
+
+**Latency impact** — none: the opening is ~1 sentence (~4 s spoken) longer.
+
+**Deliberately not done**
+- A deployment without eyes (no Anthropic key) still hears the invite, though its share button is hidden.
+- **Haiku 5.5 "fastest" (thinking off) skips the invite** (0 of 2 typed runs); at effort `low` it invited 2 of 2. Whether "fastest" moves to `low` is a Chapter 8 trade-off left to the user.
+
+**Verification**
+- `uv run verify` passes.
+- Typed conversations against a local server, real engines:
+  - Declined sharing:
+    - DeepSeek (default) and Sonnet 5.5 invited once after the task was named ("Could you share your screen with the button at the top, and show me as you go?").
+    - Both accepted "I'd rather just talk it through" and never asked again.
+  - Shared after the invite: "Got it, I can see Skyscanner", then back to the task.
+  - Sharing a real screen by voice was not exercised.
+- `--replay-thinker walking_through`: 4/4 hits, 0/6 false fires; the inner voice adds no invites of its own.
+
 ## Chapter 8 — Haiku 5.5: the fast tier, renewed, each use at the effort it measured best
 
 No new behaviour: every use of Claude Haiku 4.5 moves to Haiku 5.5, which costs
