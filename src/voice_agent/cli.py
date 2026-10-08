@@ -12,6 +12,7 @@ import uvicorn
 from dotenv import load_dotenv
 
 from voice_agent import roles
+from voice_agent.bench import DEFAULT_TARGETS as BENCH_TARGETS
 from voice_agent.config import (
     DEFAULT_INITIATIVE_DELAYS,
     Settings,
@@ -105,9 +106,9 @@ def main() -> None:
     parser.add_argument(
         "--bench-llm",
         nargs="*",
-        metavar="PROVIDER[:MODEL]",
+        metavar="PROVIDER[:MODEL[:EFFORT]]",
         help="time to first token per provider, over a few short billed calls, then exit "
-        "(default: deepseek, openai, anthropic:claude-haiku-4-5, anthropic)",
+        f"(default: {', '.join(BENCH_TARGETS)})",
     )
     parser.add_argument(
         "--replay-thinker",
@@ -115,6 +116,12 @@ def main() -> None:
         metavar="SCENARIO",
         help="replay scripted conversations from tests/scenarios/ through the inner voice "
         "and score it, then exit; billed, one call per pause (default: all)",
+    )
+    parser.add_argument(
+        "--thinker",
+        metavar="MODEL[:EFFORT]",
+        default=None,
+        help="which Claude model --replay-thinker replays (default: the inner voice's own)",
     )
     parser.add_argument(
         "--judge",
@@ -132,6 +139,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.judge_with is not None and args.judge is None:
         parser.error("--judge-with needs --judge RECORD")
+    if args.thinker is not None and args.replay_thinker is None:
+        parser.error("--thinker needs --replay-thinker")
     try:
         settings = with_flags(settings, args)
     except ConfigError as exc:
@@ -148,7 +157,7 @@ def main() -> None:
     if args.replay_thinker is not None:
         from voice_agent.replay import main as replay
 
-        replay(args.replay_thinker)
+        replay(args.replay_thinker, args.thinker)
         return
 
     if args.judge is not None:

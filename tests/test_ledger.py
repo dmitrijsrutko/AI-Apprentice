@@ -43,7 +43,7 @@ Are they?
 """
 
 OLD = """# Conversation old
-started 2026-09-20 09:00:00 · role none · llm anthropic/claude-haiku-4-5 (haiku-4-5) · ears deaf · voice silent
+started 2026-09-20 09:00:00 · role none · llm anthropic/claude-haiku-5-5 (haiku-5-5) · ears deaf · voice silent
 
 ## 09:00:00 — agent (greeting)
 
@@ -160,7 +160,7 @@ MENU = {
         {"name": "partner", "title": "Thinking partner"},
     ],
     "llm": [
-        {"name": "haiku-4-5", "title": "Haiku 4.5", "hint": "fastest", "provider": "anthropic"},
+        {"name": "haiku-5-5", "title": "Haiku 5.5", "hint": "fastest", "provider": "anthropic"},
         {"name": "deepseek-low", "title": "V4.1 Flash", "hint": "balanced", "provider": "deepseek"},
         {
             "name": "deepseek-high",
@@ -192,11 +192,11 @@ def test_the_breakdown_is_the_start_screen_with_zeros_for_what_nobody_picked(
     assert [s["title"] for s in sections] == ["Role", "Reasoning", "Ears", "Voice", "Judge"]
     reasoning = by_title["Reasoning"]
     assert [r["label"] for r in reasoning[:2]] == [
-        "Claude Haiku 4.5 · fastest",
+        "Claude Haiku 5.5 · fastest",
         "DeepSeek V4.1 Flash · balanced",
     ], "every offered option, in menu order, named as the start screen names it"
     assert [(r["name"], r["sessions"]) for r in reasoning] == [
-        ("haiku-4-5", 1),
+        ("haiku-5-5", 1),
         ("deepseek-low", 1),
         ("deepseek-high", 0),
     ], "deepseek-high was never picked, and is listed anyway"
@@ -242,7 +242,7 @@ def test_a_retired_option_follows_the_offered_ones_only_when_used() -> None:
     reasoning = ledger.breakdown(stats, MENU)[1]["rows"]
 
     assert [r["name"] for r in reasoning] == [
-        "haiku-4-5",
+        "haiku-5-5",
         "deepseek-low",
         "deepseek-high",
         "deepseek-max",

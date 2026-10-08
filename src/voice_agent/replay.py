@@ -11,12 +11,14 @@ import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast, get_args
 
 from voice_agent import roles
 from voice_agent.conversation import Conversation
 from voice_agent.llm import LLM, create_llm
+from voice_agent.llm.base import Effort
 from voice_agent.llm.traced import Traced
-from voice_agent.thinker import THINKER_MODEL, Thinker
+from voice_agent.thinker import THINKER_EFFORT, THINKER_MODEL, Thinker
 
 SCENARIOS_DIR = Path(__file__).resolve().parents[2] / "tests" / "scenarios"
 
@@ -27,9 +29,12 @@ one breath late is still saying it."""
 URGENT = 2
 """The urgency from which a thought counts as stepping in."""
 
-PRICE_PER_MILLION = (1.00, 5.00)
-"""Claude Haiku 4.5, input and output, in dollars (2026). Cached reads are
-billed lower; this ignores that, so it overstates."""
+PRICE_PER_MILLION: dict[str, tuple[float, float]] = {
+    "claude-haiku-5-5": (0.10, 0.50),
+}
+"""Input and output, in dollars (2026), for prompts under 100K tokens. Cached
+reads are billed lower; this ignores that, so it overstates. A model missing
+here is reported at $0 rather than guessed."""
 
 LABEL = re.compile(r"^\{(expect \w+|clean)\}\s*")
 
@@ -123,6 +128,7 @@ class Outcome:
 class Score:
     scenario: str
     outcomes: list[Outcome] = field(default_factory=list)
+    price: tuple[float, float] = (0.0, 0.0)
 
     @property
     def windows(self) -> list[tuple[int, str]]:
@@ -166,7 +172,7 @@ class Score:
     def cost(self) -> float:
         tokens_in = sum(o.prompt_tokens for o in self.outcomes)
         tokens_out = sum(o.output_tokens for o in self.outcomes)
-        return (tokens_in * PRICE_PER_MILLION[0] + tokens_out * PRICE_PER_MILLION[1]) / 1e6
+        return (tokens_in * self.price[0] + tokens_out * self.price[1]) / 1e6
 
 
 async def replay(scenario: Scenario, engine: LLM, role_dir: Path | None = None) -> Score:
@@ -183,7 +189,8 @@ async def replay(scenario: Scenario, engine: LLM, role_dir: Path | None = None) 
     thinker = Thinker(
         engine, role, conversation, hearing=lambda: hearing, report=report, per_minute=10**6
     )
-    score = Score(scenario.name)
+    model = getattr(engine, "model", "")
+    score = Score(scenario.name, price=PRICE_PER_MILLION.get(model, (0.0, 0.0)))
     for step in scenario.steps:
         if step.speaker == "Partner":
             conversation.add_assistant(step.text)
@@ -240,14 +247,24 @@ def report(scores: Sequence[Score]) -> str:
     return "\n".join(rows)
 
 
-def main(names: Sequence[str]) -> None:
+def main(names: Sequence[str], thinker: str | None = None) -> None:
+    """`thinker`: `model[:effort]` to replay instead of the production inner
+    voice, so two candidates are scored on the same scenarios."""
     scenarios = load(names)
     if not scenarios:
         # The image leaves `tests/` out: this is a tool for a checkout.
         raise SystemExit(f"no scenarios in {SCENARIOS_DIR}; run this from a source checkout")
-    engine = Traced(create_llm("anthropic", THINKER_MODEL))
+    model: str = THINKER_MODEL
+    effort: Effort | None = THINKER_EFFORT
+    if thinker:
+        named, _, asked = thinker.partition(":")
+        if asked and asked not in get_args(Effort):
+            raise SystemExit(f"--thinker: effort {asked!r} is not one of {get_args(Effort)}")
+        model, effort = named, cast(Effort, asked) if asked else None
+    engine = Traced(create_llm("anthropic", model, effort))
     calls = sum(len(step.asks) for s in scenarios for step in s.steps)
-    print(f"replaying {len(scenarios)} scenario(s): {calls} billed calls to {THINKER_MODEL}\n")
+    at = f" at effort {effort}" if effort else ""
+    print(f"replaying {len(scenarios)} scenario(s): {calls} billed calls to {model}{at}\n")
 
     async def run() -> list[Score]:
         return [await replay(s, engine) for s in scenarios]

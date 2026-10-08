@@ -39,7 +39,7 @@ MODELS: tuple[str, ...] = (
     "claude-fable-5-1",
     "claude-opus-5-5",
     "claude-sonnet-5-5",
-    "claude-haiku-4-5",
+    "claude-haiku-5-5",
 )
 """Every model this provider serves. `registry.check_model` holds a configured
 model to this list, which is what stops a Claude name reaching another vendor.
@@ -47,9 +47,8 @@ model to this list, which is what stops a Claude name reaching another vendor.
 The list is the truth rather than a guess about how models are named, and a
 vendor's next model is added here. That is the cost of refusing a wrong pair
 instead of discovering it on a conversation's first turn. Three other spellings
-resolve and are deliberately absent: `claude-opus-5` and `claude-sonnet-5` are
-the *previous* Opus and Sonnet, and `claude-haiku-4-5-20251001` is the dated
-form of the alias already listed."""
+resolve and are deliberately absent: `claude-opus-5`, `claude-sonnet-5` and
+`claude-haiku-4-5` are the *previous* Opus, Sonnet and Haiku."""
 
 DEFAULT_EFFORT: Effort = "low"
 """What this engine asks for when a caller names no effort. It lives here with
@@ -61,19 +60,20 @@ token is exactly what a spoken conversation cannot afford; low is the supported
 way to shorten it — disabling thinking outright is documented to cause the model
 to narrate tool calls and leak reasoning tags into the reply.
 
-Whether a given model accepts it is not something this constant can know: Claude
-Haiku 4.5 rejects the parameter outright with a 400, so `_effort` asks the Models
-API and drops it for the models that have none."""
+Whether a given model accepts it is not something this constant can know: a model
+without effort rejects the parameter outright with a 400 (Haiku 4.5 did), so
+`_effort` asks the Models API and drops it for the models that have none."""
 
 
-THINKING_OFF = frozenset({"claude-sonnet-5-5"})
-"""The Claude models that can be asked not to think at all (`effort="off"`).
-Sonnet 5.5 takes `thinking: {"type": "between_tools"}` for it — `disabled`
-is refused with a 400 that names the replacement. Meant for a one-word
-decision (`overtaken.py`), where the leak described above cannot happen; a
-spoken reply keeps `low`."""
-
-THINKING_OFF_PARAM = {"thinking": {"type": "between_tools"}}
+THINKING_OFF: dict[str, dict[str, object]] = {
+    "claude-sonnet-5-5": {"thinking": {"type": "between_tools"}},
+    "claude-haiku-5-5": {"thinking": {"type": "disabled"}},
+}
+"""The Claude models that can be asked not to think at all (`effort="off"`), and
+the request body that says so — each model has its own word. Sonnet 5.5 refuses
+`disabled` with a 400 that names `between_tools`; Haiku 5.5 refuses
+`between_tools` and takes `disabled` (at effort high or below, and we send none
+beside it). Opus 5.5 has no off at all."""
 
 
 CACHE_THROUGH_LAST: CacheControlEphemeralParam = {"type": "ephemeral"}
@@ -111,8 +111,8 @@ class AnthropicLLM:
         self.provider = "anthropic"
         self.model = model or DEFAULT_MODEL
         if effort == "off" and self.model not in THINKING_OFF:
-            # At startup, not on the first turn: Haiku has no thinking to switch
-            # off, and Opus 5.5 refuses to — `low` is the least there is.
+            # At startup, not on the first turn: Opus 5.5 refuses to switch
+            # thinking off — `low` is the least there is.
             raise ConfigError(
                 f"no Claude option switches thinking off for {self.model}; ask for low"
             )
@@ -167,7 +167,7 @@ class AnthropicLLM:
                 output_config=effort,
                 messages=to_anthropic_messages(messages),
                 cache_control=CACHE_THROUGH_LAST,
-                extra_body=THINKING_OFF_PARAM if self.effort == "off" else None,
+                extra_body=THINKING_OFF[self.model] if self.effort == "off" else None,
             ) as stream:
                 if usage is not None:
                     call.fill(usage)

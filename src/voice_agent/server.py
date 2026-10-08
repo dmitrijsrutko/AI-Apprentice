@@ -58,7 +58,7 @@ from voice_agent.sessions import SessionStore
 from voice_agent.stt import STT
 from voice_agent.stt.registry import NO_EARS
 from voice_agent.teach import Tutor
-from voice_agent.thinker import THINKER_MODEL, system_prompt
+from voice_agent.thinker import THINKER_EFFORT, THINKER_MODEL, system_prompt
 from voice_agent.timeline import Timeline
 from voice_agent.tts import TTS
 from voice_agent.tts.base import SAMPLE_RATE
@@ -160,7 +160,7 @@ def thinker_engine(cards: dict[str, roles.Role]) -> LLM | None:
     if not cards:
         return None
     try:
-        return Traced(create_llm("anthropic", THINKER_MODEL))
+        return Traced(create_llm("anthropic", THINKER_MODEL, THINKER_EFFORT))
     except ConfigError as exc:
         logger.warning("roles will have no inner voice: %s", exc)
         return None

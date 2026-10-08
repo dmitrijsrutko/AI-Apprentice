@@ -8,14 +8,15 @@ import statistics
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import cast, get_args
 
 from voice_agent import prompts
 from voice_agent.conversation import Message
-from voice_agent.errors import VoiceAgentError
+from voice_agent.errors import ConfigError, VoiceAgentError
 from voice_agent.llm import LLM, create_llm
-from voice_agent.llm.base import Usage
+from voice_agent.llm.base import Effort, Usage
 
-DEFAULT_TARGETS = ("deepseek", "openai", "anthropic:claude-haiku-4-5", "anthropic")
+DEFAULT_TARGETS = ("deepseek", "openai", "anthropic:claude-haiku-5-5:off", "anthropic")
 
 ROUNDS = 5
 """Each after the target has connected, as the agent connects at startup."""
@@ -42,9 +43,14 @@ class Result:
     errors: list[str] = field(default_factory=list)
 
 
-def parse(target: str) -> tuple[str, str | None]:
-    provider, _, model = target.partition(":")
-    return provider, model or None
+def parse(target: str) -> tuple[str, str | None, Effort | None]:
+    """`provider[:model[:effort]]`; an empty part is the engine's own default,
+    so `deepseek::off` is DeepSeek's default model with thinking off."""
+    provider, _, rest = target.partition(":")
+    model, _, effort = rest.partition(":")
+    if effort and effort not in get_args(Effort):
+        raise ConfigError(f"{target}: effort {effort!r} is not one of {get_args(Effort)}")
+    return provider, model or None, cast(Effort, effort) if effort else None
 
 
 async def measure(llm: LLM, system: str, messages: Sequence[Message]) -> Sample:
@@ -68,7 +74,7 @@ async def measure(llm: LLM, system: str, messages: Sequence[Message]) -> Sample:
 async def run(
     targets: Sequence[str],
     rounds: int = ROUNDS,
-    build: Callable[[str, str | None], LLM] = create_llm,
+    build: Callable[[str, str | None, Effort | None], LLM] = create_llm,
 ) -> list[Result]:
     """Round-robin, so a provider's slow minute is spread across the others
     rather than landing on whichever one happened to run then."""

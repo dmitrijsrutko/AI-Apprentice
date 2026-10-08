@@ -60,9 +60,10 @@ primary_region = "iad"
   # No reasoning engine is pinned here any more. The page offers the menu and
   # preselects DeepSeek V4.1 Flash with thinking off, the leftmost option. Measured
   # from *this* region with `--bench-llm`, DeepSeek's time to first token is
-  # 915 ms p50 against Haiku's 435 ms — a gap of 2.1x — because DeepSeek is
-  # served from China and iad is the wrong side of the planet for it. A visitor
-  # can pick Haiku per conversation, which is the point of the menu.
+  # 915 ms p50 against Haiku 4.5's 435 ms — a gap of 2.1x — because DeepSeek is
+  # served from China and iad is the wrong side of the planet for it. Haiku 5.5
+  # with thinking off matched Haiku 4.5 measured locally (Chapter 8; not yet from iad).
+  # A visitor can pick Haiku per conversation, which is the point of the menu.
 
   # Recorded, and the page says so before anybody speaks (`noteRecording`).
   VOICE_AGENT_SESSIONS = "/data/sessions"

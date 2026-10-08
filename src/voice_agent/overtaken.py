@@ -17,12 +17,12 @@ ENGINES: tuple[tuple[str, str], ...] = (
     ("deepseek", "deepseek-flash"),
     ("anthropic", "claude-sonnet-5-5"),
 )
-"""Who weighs it, first one whose key is set, always with thinking off.
-Measured on five cases from the live traces, three runs each, from the Fly
-machine: DeepSeek V4.1 Flash 15/15 at a 0.82 s median, Sonnet 5.5 15/15 at
-1.14 s, Haiku 4.5 14-15/15 at 0.49-0.58 s. Over every run made, DeepSeek was
-wrong once in 55 and Sonnet never in 70: the faster one at about the same
-certainty first, Sonnet behind it for a deployment without a DeepSeek key."""
+"""Who weighs it, first one whose key is set, always with thinking off: the
+faster one at about the same certainty first, Sonnet behind it for a deployment
+without a DeepSeek key. Haiku 5.5 is faster still but misses a STOP Sonnet
+catches (`docs/overtaken-eval.md`). Thinking off is a requirement, not a
+preference: at `low` Haiku 5.5 spent all of `MAX_TOKENS` thinking and said
+nothing."""
 
 MAX_TOKENS = 48
 """GO, or STOP with the claim that is now false: naming it is what keeps the

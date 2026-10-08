@@ -90,7 +90,7 @@ class Choice:
 
 
 CHOICES: tuple[Choice, ...] = (
-    Choice("haiku-4-5", "anthropic", "claude-haiku-4-5", "Haiku 4.5", hint="fastest"),
+    Choice("haiku-5-5", "anthropic", "claude-haiku-5-5", "Haiku 5.5", "off", "fastest"),
     Choice("sonnet-5-5", "anthropic", "claude-sonnet-5-5", "Sonnet 5.5", "low", "balanced"),
     Choice("opus-5-5", "anthropic", "claude-opus-5-5", "Opus 5.5", "medium", "smartest"),
     Choice("deepseek-off", "deepseek", "deepseek-flash", "V4.1 Flash", "off", "fastest"),
@@ -102,14 +102,12 @@ the cheapest. The page draws each vendor's row in this order too, so fastest is
 on the left and smartest on the right, in the same three words for every vendor.
 
 One rule makes the columns comparable across vendors: **fastest** does not think
-(DeepSeek switched off; Haiku 4.5 has no thinking), **balanced** thinks the least
-it can (`low` on both), **smartest** thinks as its vendor sets by default
+(thinking switched off, on DeepSeek and on Haiku 5.5), **balanced** thinks the
+least it can (`low` on both), **smartest** thinks as its vendor sets by default
 (DeepSeek `high`; Opus 5.5 `medium`). Claude's tiers are different models;
 DeepSeek's are one model at different efforts, because that is what it offers.
-
-Haiku 4.5 is the reason a choice may not set an effort rather than set `None`
-to mean "none": it is the model that rejects the parameter, and only the adapter
-can discover that, by asking. Its `Choice.effort` is `None`.
+Haiku 5.5 thinks unless told not to (at `medium`), so its `off` is stated, not
+assumed.
 
 A title names the model **without its vendor**, because the page groups the
 options under the vendor's own name — "Claude" over three, "DeepSeek" over three.
@@ -123,6 +121,10 @@ its fastest. An apprentice is judged on the question it asks more than on how
 soon it asks it, and the thinking is paid for in time to first token."""
 
 BY_NAME: dict[str, Choice] = {choice.name: choice for choice in CHOICES}
+
+RENAMED: dict[str, str] = {"haiku-4-5": "haiku-5-5"}
+"""Options that were replaced: a link or a pinned conversation that names the
+old one runs its successor rather than a default it never chose."""
 
 
 def check_model(provider: str, model: str | None) -> None:

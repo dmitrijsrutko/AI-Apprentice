@@ -15,6 +15,70 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 8 — Haiku 5.5: the fast tier, renewed, each use at the effort it measured best
+
+No new behaviour: every use of Claude Haiku 4.5 moves to Haiku 5.5, which costs
+a tenth as much and is far stronger. It is not a drop-in swap, though. Haiku 5.5
+thinks unless told not to (at effort `medium`), and thinking counts against
+`max_tokens`, so the eyes' 400-token cap and the self-cut check's 48 would have
+been spent on reasoning. Each use was measured against Haiku 4.5 and given its
+own effort.
+
+**What changed**
+- **Reply engine (`registry.py`):** `haiku-5-5` replaces `haiku-4-5` as Claude's **fastest**, with thinking `off`.
+- **Eyes (`vision.py`):** the `haiku-5-5` option, also thinking `off`, is now the **default**, with Sonnet second. `effort="off"` sends `thinking: disabled`. The cap rises to 1200 tokens, and a refusal raises rather than reading as a blank screen.
+- **Inner voice (`thinker.py`):** Haiku 5.5 at `THINKER_EFFORT = "low"`, passed by `server.thinker_engine` and the replay.
+- **Provider (`anthropic_provider.py`):** `THINKING_OFF` maps each model to its own word for off: `between_tools` on Sonnet 5.5, `disabled` on Haiku 5.5. Haiku 4.5 leaves `MODELS`.
+- **Renamed options:** `RENAMED` in `registry` and `vision`, applied in `Backends.choose`/`eyes_for`. A link or a pinned conversation naming `haiku-4-5` runs 5.5.
+- **Tools:**
+  - `--bench-llm provider:model:effort`.
+  - `--replay-thinker --thinker model[:effort]`, priced per model.
+  - `overtaken_eval.py --engine` (prints only, adds p90 and tokens out).
+  - `eyes_eval.py --models name[@effort]` (every model gets the same runs; failures counted).
+
+**Design decisions** (all measured locally, with Haiku 4.5 re-run alongside)
+- **Reply engine: `off`.** Time to first token, p50 of 5, two passes: Haiku 4.5 492/523 ms; Haiku 5.5 `off` 520/519, `low` 563/554, `medium` 521/539; DeepSeek `off` 822/709. On a one-sentence question Haiku 5.5 skips thinking at any level. `off` keeps the menu's rule that "fastest" does not think, and makes sure a hard turn cannot slow it.
+- **Eyes: `off`.** On the page's frame (1024 px JPEG 0.85 + close-up), values found / ms, at 1080p and 4K:
+
+  | Model | 1080p | 4K | Tokens out |
+  |---|---|---|---|
+  | Sonnet 5.5 `low` (was the default) | 10.0 · 3011 | 10.0 · 2890 | ~330 |
+  | Haiku 4.5 | 10.0 · 3951 | 9.3 · 3992 | ~255 |
+  | **Haiku 5.5 `off`** | **10.0 · 2261** | **9.7 · 2022** | ~355 |
+  | Haiku 5.5 `low` | 10.0 · 3724 | 10.0 · 4913, 1 cut off at 1200 | ~850 |
+
+  Without the close-up, Haiku 4.5 found 4.7/10 with misreads and Haiku 5.5 `off` found 9.3–10. Haiku 5.5 is the fastest eyes and as accurate as Sonnet, so it becomes the default (the user's call); Sonnet stays a choice.
+- **Inner voice: `low`.** Over 6 scenarios (91 calls each), two runs per model:
+
+  | Model | Hits | False fires | Call median | Per run |
+  |---|---|---|---|---|
+  | Haiku 4.5 | 19, 20 / 20 | 17, 14 / 26 | ~1.95 s | $0.24 |
+  | Haiku 5.5 `off` | 13, 11 / 20 | 4, 9 / 26 | ~1.3 s | $0.03 |
+  | **Haiku 5.5 `low`** | **18, 17 / 20** | **8, 6 / 26** | **~1.55 s** | **$0.03** |
+
+  `off` stays quiet where it should speak. `low` catches about as much as 4.5 with half the false alarms.
+- **Self-cut check: unchanged.** Haiku 5.5 with thinking off is the fastest (727 ms against DeepSeek's 881) and never cut a true line. But it missed one STOP case all six times, where Sonnet was 30/30 (`docs/overtaken-eval.md`). At `low` it spent all 48 tokens thinking and said nothing. Whether it joins `overtaken.ENGINES` is for the user to decide.
+
+**Latency impact** (measured locally)
+- Reply engine: unchanged, ~0.52 s to first token for Claude's fastest.
+- Eyes: Haiku 5.5 readings take ~2.0–2.3 s against Haiku 4.5's ~4.0 s.
+- Inner voice: ~0.4 s faster per call.
+
+**Deliberately not done**
+- Fly (iad) numbers: they need a deploy.
+- `xhigh`/`max`: never tried.
+- Haiku 5.5 is not in the self-cut engines; that awaits the user's call.
+- A reply-quality eval for the reply engine at `off` against `low`: there is none yet.
+
+**Verification**
+- `uv run verify` passes (1002 tests; tapes unchanged).
+- Real calls through the shipped settings:
+  - The replay of `no_position` (2/2 hits).
+  - The eyes menu (Haiku 5.5: 10/10 at ~2 s).
+  - The default bench (0.53 s).
+  - A local server offering Haiku 5.5, and opening `?llm=haiku-4-5`.
+- A live voice conversation with a shared screen was not run.
+
 ## Chapter 7 — The screen overtakes the voice: it stops itself when what it is saying went stale
 
 Until now only the user's voice (or typed text) could stop the agent. The
@@ -49,9 +113,9 @@ heard, like a barge-in, and says something fresh about the screen as it is now.
   has just answered is stale too.
 - **DeepSeek V4.1 Flash with thinking off.** Five cases from the traces, three
   runs each, all four models called in turn under the same conditions, from
-  the Fly machine (iad, production) and from Riga:
+  the Fly machine (iad, production) and locally:
 
-  | Check model | Right (Fly) | Median Fly | p90 Fly | Cold Fly | Right (Riga) | Median Riga | Tokens out |
+  | Check model | Right (Fly) | Median Fly | p90 Fly | Cold Fly | Right (local) | Median local | Tokens out |
   |---|---|---|---|---|---|---|---|
   | **DeepSeek V4.1 Flash, thinking off** | **15/15** | **816 ms** | **908 ms** | 1744 ms | 15/15 | 709 ms | 2 |
   | Sonnet 5.5, thinking off | 15/15 | 1137 ms | 1188 ms | 1499 ms | 15/15 | 1281 ms | 5 |

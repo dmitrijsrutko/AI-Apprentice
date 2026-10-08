@@ -1,6 +1,9 @@
 """How well the eyes read small text, per way of sending the screen.
 
-    uv run python scripts/eyes_eval.py [--runs 3] [--models sonnet-5-5,haiku-4-5]
+    uv run python scripts/eyes_eval.py [--runs 3] [--models sonnet-5-5,claude-haiku-5-5@off]
+
+A model is a menu option's name or a Claude model id, optionally `@effort`
+(`off` switches thinking off). Every model gets the same number of runs.
 
 Paid: about 40 vision calls (~$0.50). Renders `eyes_eval/flights.html` with
 headless Chrome as a 1920x1080 screen at 1x and 2x (Retina), before (`?a`) and
@@ -23,13 +26,13 @@ import re
 import statistics
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from dotenv import load_dotenv
 from PIL import Image
 
-from voice_agent.llm.vision import BY_NAME, AnthropicVision, Seen
+from voice_agent.llm.vision import BY_NAME, MENU, AnthropicVision, Option, Seen
 
 HERE = Path(__file__).parent / "eyes_eval"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -182,6 +185,15 @@ class Row:
     tokens_out: list[int]
     kb: float
     crop_px: str
+    failed: int = 0
+
+
+def option(spec: str) -> Option:
+    """`name[@effort]`: a menu option as it ships, or any Claude model id with
+    room for thinking, so a candidate is measured before it is on the menu."""
+    name, _, effort = spec.partition("@")
+    base = BY_NAME.get(name) or Option(name, name, name, "", max_tokens=1200)
+    return replace(base, name=spec, effort=effort or base.effort)
 
 
 def write(path: Path, text: str) -> None:
@@ -192,7 +204,7 @@ async def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=3)
-    parser.add_argument("--models", default="sonnet-5-5,haiku-4-5")
+    parser.add_argument("--models", default=",".join(o.name for o in MENU))
     parser.add_argument("--scales", default="1,2")
     parser.add_argument("--raw", help="where to write every reading, as JSON")
     args = parser.parse_args()
@@ -216,8 +228,8 @@ async def main() -> None:
         for variant in VARIANTS:
             full, crop = frames(variant, before, after)
             for model in models:
-                runs = args.runs if model == models[0] else 1
-                vision = AnthropicVision(BY_NAME[model])
+                runs = args.runs
+                vision = AnthropicVision(option(model))
                 crop_px = "-"
                 if crop:
                     crop_px = "x".join(map(str, Image.open(io.BytesIO(crop)).size))
@@ -241,6 +253,7 @@ async def main() -> None:
     for (row, _), seen in zip(jobs, results, strict=True):
         if isinstance(seen, BaseException):
             print(f"{row.variant} {row.model}: {seen}", file=sys.stderr)
+            row.failed += 1
             continue
         raw.append(
             {
@@ -259,9 +272,9 @@ async def main() -> None:
         row.tokens_out.append(seen.output_tokens)
 
     lines = [
-        "| Screen | Sent | Model | Values found | Misreads | Reading ms | Tokens in / out "
-        "| KB | Crop px |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| Screen | Sent | Model | Values found | Misreads | Failed | Reading ms "
+        "| Tokens in / out | KB | Crop px |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for row in rows:
         if not row.found:
@@ -270,7 +283,7 @@ async def main() -> None:
             f"| {1920 * row.scale}x{1080 * row.scale} | {row.variant} | {row.model} "
             f"| {statistics.mean(row.found):.1f} / {len(TRUTH)} "
             f"| {len(row.misreads)}{' (' + ', '.join(row.misreads) + ')' if row.misreads else ''} "
-            f"| {statistics.median(row.ms):.0f} "
+            f"| {row.failed} | {statistics.median(row.ms):.0f} "
             f"| {statistics.mean(row.tokens_in):.0f} / {statistics.mean(row.tokens_out):.0f} "
             f"| {row.kb:.0f} | {row.crop_px} |"
         )
@@ -284,7 +297,7 @@ async def main() -> None:
         "`uv run python scripts/eyes_eval.py`: a flight-results page "
         "(`scripts/eyes_eval/flights.html`) with one itinerary opened, read through the real "
         f"vision call. {len(TRUTH)} values to read; values found are the mean over runs, "
-        f"misreads the total over runs ({args.runs} runs for {models[0]}, 1 for the others).\n\n"
+        f"misreads the total over runs ({args.runs} runs each); failed: cut off or refused.\n\n"
         f"{table}\n",
     )
 

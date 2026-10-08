@@ -81,14 +81,16 @@ async def test_a_thought_in_the_window_is_a_hit_and_on_a_clean_pause_a_false_fir
 
 
 async def test_the_report_totals_calls_and_cost() -> None:
+    """Priced at the replayed model's own rate, so two candidates compare."""
     engine = Keyword("agrees")
+    engine.model = "claude-haiku-5-5"
     score = await replay.replay(replay.parse(SCRIPT, "cars"), engine)
 
     text = replay.report([score])
 
     assert engine.calls == 4
     assert "TOTAL hits 1/1 · false fires 0/1 · 4 calls" in text
-    assert score.cost == pytest.approx(4 * (1000 * 1.0 + 50 * 5.0) / 1e6)
+    assert score.cost == pytest.approx(4 * (1000 * 0.10 + 50 * 0.50) / 1e6)
 
 
 async def test_a_scenario_longer_than_the_live_cap_is_scored_whole() -> None:

@@ -41,7 +41,7 @@ def test_different_models_are_different_instances(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     pool = offered()
 
-    assert pool.engine("deepseek-low") is not pool.engine("haiku-4-5")
+    assert pool.engine("deepseek-low") is not pool.engine("haiku-5-5")
 
 
 def test_one_model_at_two_efforts_is_two_instances(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,7 +75,7 @@ def test_nothing_is_built_until_it_is_asked_for(monkeypatch: pytest.MonkeyPatch)
 
     assert pool.engine("deepseek-low") is not None  # the one with a key is fine
     with pytest.raises(ConfigError):
-        pool.engine("haiku-4-5")  # and the one without only fails when asked
+        pool.engine("haiku-5-5")  # and the one without only fails when asked
 
 
 def test_an_injected_engine_serves_every_name() -> None:
@@ -84,7 +84,7 @@ def test_an_injected_engine_serves_every_name() -> None:
     fake = FakeLLM()
     pool = offered(engine=fake)
 
-    assert pool.engine("haiku-4-5") is pool.engine("deepseek-low")
+    assert pool.engine("haiku-5-5") is pool.engine("deepseek-low")
     assert pool.engine("whatever-name").provider == fake.provider
 
 
@@ -117,7 +117,7 @@ def test_each_option_builds_its_own_provider_and_model(
         assert built[choice.name].provider == choice.provider
         assert built[choice.name].model == choice.model
 
-    assert built["haiku-4-5"].model == "claude-haiku-4-5"
+    assert built["haiku-5-5"].model == "claude-haiku-5-5"
     assert built["deepseek-high"].model == "deepseek-flash"
 
 
@@ -149,7 +149,7 @@ def test_the_default_is_v4_1_flash_thinking_high(monkeypatch: pytest.MonkeyPatch
     assert pool.menu.index(CHOICES[0]) == 0, "the menu keeps its order"
 
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    assert Backends("assemblyai").default_engine == "haiku-4-5", (
+    assert Backends("assemblyai").default_engine == "haiku-5-5", (
         "without a DeepSeek key the default is the first model that is offered"
     )
 
@@ -168,6 +168,21 @@ def test_an_option_that_cannot_be_run_is_not_offered(monkeypatch: pytest.MonkeyP
 
     kept, _, _, _ = pool.choose(Conversation(id="u"), {"llm": "deepseek-low"})
     assert kept == "deepseek-low"
+
+
+def test_a_replaced_option_runs_its_successor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Haiku 4.5 left both menus. A link that names it, or a conversation pinned
+    to it before, runs Haiku 5.5 rather than the default it never chose."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    pool = Backends("assemblyai", sees=True)
+
+    linked, *_ = pool.choose(Conversation(id="t"), {"llm": "haiku-4-5"})
+    pinned = Conversation(id="u", engine="haiku-4-5", eyes="haiku-4-5")
+    resumed, *_ = pool.choose(pinned, {})
+
+    assert linked == resumed == "haiku-5-5"
+    assert pool.eyes_for(Conversation(id="v"), {"eyes": "haiku-4-5"}) == "haiku-5-5"
+    assert pool.eyes_for(pinned, {}) == "haiku-5-5"
 
 
 # --- what the registries can answer without building anything ---------------
@@ -283,8 +298,8 @@ def test_a_preselected_role_that_is_not_a_card_is_the_first_card() -> None:
 def test_only_cards_are_offered_as_roles() -> None:
     partner = roles_module.load("thinking_partner")
     pool = Backends("assemblyai", roles=(DEVIL, partner), default_role="thinking_partner")
-    offered = pool.choices("haiku-4-5", "assemblyai", "thinking_partner")["role"]
-    alone = Backends("assemblyai").choices("haiku-4-5", "assemblyai")["role"]
+    offered = pool.choices("haiku-5-5", "assemblyai", "thinking_partner")["role"]
+    alone = Backends("assemblyai").choices("haiku-5-5", "assemblyai")["role"]
 
     assert [(o["name"], o["default"]) for o in offered] == [("thinking_partner", True)], (
         "a card with offered = false is kept but not listed"

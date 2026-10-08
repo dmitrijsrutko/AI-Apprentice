@@ -16,8 +16,8 @@ so of the seven values it accepts only three mean anything different — and
 Anthropic takes all three of these among its five. They are therefore the levels
 a DeepSeek option can honestly offer. `medium` is Anthropic's alone (Opus 5.5's own
 default, which the judge asks for); DeepSeek would read it as `high`. `off` is
-DeepSeek's alone: thinking switched off, not merely shortened — no Claude option
-may ask for it (Haiku has no thinking to switch off; Opus 5.5 refuses). An adapter
+thinking switched off, not merely shortened: DeepSeek, Sonnet 5.5 and Haiku 5.5
+take it, each in its own words; Opus 5.5 refuses it. An adapter
 translates this into whatever its own SDK wants; a vendor's type never crosses
 this boundary.
 

@@ -1,14 +1,16 @@
 """How well the self-cut check tells a line the screen made wrong from one it
 did not.
 
-    uv run --env-file .env python scripts/overtaken_eval.py [--runs 3]
+    uv run --env-file .env python scripts/overtaken_eval.py [--runs 3] [--engine PROVIDER:MODEL]
 
 Paid: cases x runs tiny calls on the production engine (`server.overtaken_engine`,
 DeepSeek V4.1 Flash with thinking off; Sonnet 5.5 without a DeepSeek key).
 The cases are taken from live sessions, anonymised: what the agent had said,
 what it was still to say, what the screen changed to, and — for a reply —
 what the user had just said. A wrong STOP cuts a true line mid-sentence, which
-is the costlier mistake. Writes `docs/overtaken-eval.md`.
+is the costlier mistake. Writes `docs/overtaken-eval.md` for the production
+engine; `--engine` tries another (thinking off, as production runs) and only
+prints, so a candidate never overwrites the record of what ships.
 """
 
 import argparse
@@ -20,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from voice_agent import overtaken
+from voice_agent.llm import create_llm
+from voice_agent.llm.base import Usage
 from voice_agent.server import overtaken_engine
 
 
@@ -127,22 +131,36 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--label", default="")
+    parser.add_argument(
+        "--engine",
+        help="PROVIDER:MODEL[:EFFORT] instead of the production engine (effort: off)",
+    )
     args = parser.parse_args()
-    engine = overtaken_engine()
+    if args.engine:
+        provider, _, rest = args.engine.partition(":")
+        model, _, effort = rest.partition(":")
+        engine = create_llm(
+            provider, model or None, effort or "off", max_tokens=overtaken.MAX_TOKENS
+        )
+    else:
+        engine = overtaken_engine()
     assert engine is not None, "no key for any check engine"
     await engine.connect()
     takes_asked = "asked" in inspect.signature(overtaken.question).parameters
     rows: list[str] = []
     ms: list[float] = []
+    tokens_out: list[int] = []
     right = total = wrong_stop = wrong_go = 0
     for case in CASES:
         got: list[str] = []
         for _ in range(args.runs):
             extra = {"asked": case.asked} if takes_asked else {}
             ask = overtaken.question(case.said, case.rest, case.seen, case.screen, **extra)
+            usage = Usage()
             started = time.monotonic()
-            verdict = await overtaken.stale(engine, ask)
+            verdict = await overtaken.stale(engine, ask, usage)
             ms.append((time.monotonic() - started) * 1000)
+            tokens_out.append(usage.output_tokens)
             stop = verdict[0] if isinstance(verdict, tuple) else verdict
             got.append("STOP" if stop else "GO")
         hits = got.count(case.want)
@@ -155,11 +173,14 @@ async def main() -> None:
         rows.append(f"| {case.name} | {case.want} | {' '.join(got)} | {hits}/{len(got)} |")
     summary = (
         f"{right}/{total} right · wrong STOP {wrong_stop} · wrong GO {wrong_go} · "
-        f"median {statistics.median(ms):.0f} ms · {engine.model}"
+        f"median {statistics.median(ms):.0f} ms · p90 {statistics.quantiles(ms, n=10)[-1]:.0f} ms"
+        f" · max {max(tokens_out)} tokens out of {overtaken.MAX_TOKENS} · {engine.model}"
     )
     table = "\n".join(["| Case | Want | Got | Right |", "|---|---|---|---|", *rows])
     print(table)
     print(summary)
+    if args.engine:
+        return
     write(
         Path(__file__).parent.parent / "docs" / "overtaken-eval.md",
         "# The self-cut check's eval\n\n"

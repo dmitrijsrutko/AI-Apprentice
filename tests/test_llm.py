@@ -108,9 +108,9 @@ def test_a_model_from_another_provider_is_refused_by_name() -> None:
     """The pair that reached a live conversation: provider `deepseek` carrying
     a Claude model, which 400'd on its first turn."""
     with pytest.raises(ConfigError) as raised:
-        check_model("deepseek", "claude-haiku-4-5")
+        check_model("deepseek", "claude-haiku-5-5")
 
-    assert "claude-haiku-4-5" in str(raised.value)
+    assert "claude-haiku-5-5" in str(raised.value)
     assert "deepseek-flash" in str(raised.value), "the models that fit went unnamed"
 
 
@@ -119,7 +119,7 @@ def test_create_llm_refuses_a_model_from_another_provider() -> None:
     Claude model, which 400'd on its first turn. `create_llm` is the one place
     every engine is built, so it is where a pair is refused."""
     with pytest.raises(ConfigError, match="deepseek-flash"):
-        create_llm("deepseek", "claude-haiku-4-5")
+        create_llm("deepseek", "claude-haiku-5-5")
 
 
 def test_the_output_cap_leaves_room_for_a_chain_of_thought() -> None:
@@ -222,7 +222,7 @@ def test_a_declared_model_and_no_override_at_all_are_both_fine() -> None:
     check_model("deepseek", "deepseek-v4-pro")
     check_model("deepseek", None)
     # An unknown provider is `create_llm`'s to name, not this check's.
-    check_model("no-such-provider", "claude-haiku-4-5")
+    check_model("no-such-provider", "claude-haiku-5-5")
 
 
 def test_a_missing_key_fails_loudly_rather_than_at_the_first_request(
@@ -356,7 +356,7 @@ async def test_the_effort_this_conversation_asked_for_is_the_one_sent(asked: str
 
 
 async def test_no_effort_means_nothing_is_sent_even_where_it_is_supported() -> None:
-    """Haiku 4.5 gets no effort at all from the menu. The capability check alone
+    """`None` is an instruction to send nothing. The capability check alone
     would not be enough: this model reports that it supports one."""
     calls: list[dict[str, Any]] = []
     final = SimpleNamespace(
@@ -377,9 +377,13 @@ async def test_no_effort_means_nothing_is_sent_even_where_it_is_supported() -> N
     assert llm.effort is None
 
 
-async def test_sonnet_5_5_is_asked_not_to_think_in_the_way_it_accepts() -> None:
-    """`thinking: disabled` is refused with a 400 on this model; `between_tools`
-    is its word for off, and no effort goes with it."""
+@pytest.mark.parametrize(
+    ("model", "off"),
+    [("claude-sonnet-5-5", "between_tools"), ("claude-haiku-5-5", "disabled")],
+)
+async def test_each_model_is_asked_not_to_think_in_the_way_it_accepts(model: str, off: str) -> None:
+    """Sonnet 5.5 refuses `disabled` with a 400 and Haiku 5.5 refuses
+    `between_tools`: each has its own word for off, and no effort goes with it."""
     calls: list[dict[str, Any]] = []
     final = SimpleNamespace(
         input_tokens=1, output_tokens=1, cache_read_input_tokens=0, cache_creation_input_tokens=0
@@ -390,9 +394,17 @@ async def test_sonnet_5_5_is_asked_not_to_think_in_the_way_it_accepts() -> None:
         return FakeAnthropicStream(["GO"], final)
 
     client = SimpleNamespace(messages=SimpleNamespace(stream=stream), models=models(effort=True))
-    llm = AnthropicLLM("claude-sonnet-5-5", "off", client=client)  # type: ignore[arg-type]
+    llm = AnthropicLLM(model, "off", client=client)  # type: ignore[arg-type]
 
     [_ async for _ in llm.stream("s", CONVERSATION, Usage())]
 
-    assert calls[0]["extra_body"] == {"thinking": {"type": "between_tools"}}
+    assert calls[0]["extra_body"] == {"thinking": {"type": off}}
     assert calls[0]["output_config"] is omit
+
+
+def test_off_is_refused_at_startup_for_a_model_with_no_off() -> None:
+    """Opus 5.5 400s on every way of switching thinking off: refused when the
+    engine is built, not on a conversation's first turn."""
+    client = SimpleNamespace(models=models(effort=True))
+    with pytest.raises(ConfigError, match="ask for low"):
+        AnthropicLLM("claude-opus-5-5", "off", client=client)  # type: ignore[arg-type]

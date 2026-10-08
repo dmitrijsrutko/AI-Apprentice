@@ -80,7 +80,7 @@ class Settings:
     """How many frames one conversation may have read: with two in flight,
     about 25 minutes of a screen that never stops changing. Measured per
     reading: Sonnet 5.5 ~1,800 in and ~300 out (its thinking counts), so ~$6 at
-    the cap; Haiku 4.5 ~1,550 in and ~100-250 out, so ~$2. A close-up of a
+    the cap; Haiku 5.5, thinking off, ~2,100 in and ~350 out, so ~$0.35. A close-up of a
     small change raises the input to ~2,300 (1x) or ~3,000 (Retina) tokens
     (`docs/eyes-eval.md`): up to a third to two thirds more input at the cap.
     A spend cap for the public instance; `off` for none."""

@@ -25,15 +25,20 @@ from voice_agent import prompts, timing, trace
 from voice_agent.conversation import Conversation, Message, eyes_status, seen_note
 from voice_agent.errors import VoiceAgentError
 from voice_agent.llm import LLM
-from voice_agent.llm.base import Usage
+from voice_agent.llm.base import Effort, Usage
 from voice_agent.roles import Role
 from voice_agent.streams import closing
 from voice_agent.timing import elapsed_ms
 
 logger = logging.getLogger(__name__)
 
-THINKER_MODEL = "claude-haiku-4-5"
+THINKER_MODEL = "claude-haiku-5-5"
 """Fast and cheap enough to run on every pause; the reply engine is untouched."""
+
+THINKER_EFFORT: Effort = "low"
+"""Stated, because Haiku 5.5 thinks at `medium` unless told. With thinking
+off it stays quiet at moments it should speak; `low` is the least that
+catches them."""
 
 
 MONOLOGUE_SECONDS = 8.0

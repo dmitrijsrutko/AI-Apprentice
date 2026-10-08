@@ -2,12 +2,14 @@
 
 from collections.abc import AsyncIterator, Sequence
 
+import pytest
+
 from tests.conftest import FakeLLM
 from voice_agent.bench import Result, Sample, parse, report, run
 from voice_agent.conversation import Message
 from voice_agent.errors import ConfigError, ProviderError
 from voice_agent.llm import LLM
-from voice_agent.llm.base import Usage
+from voice_agent.llm.base import Effort, Usage
 
 
 class Reopening(FakeLLM):
@@ -21,15 +23,22 @@ class Reopening(FakeLLM):
             yield fragment
 
 
-def test_a_target_names_a_provider_and_optionally_a_model() -> None:
-    assert parse("deepseek") == ("deepseek", None)
-    assert parse("anthropic:claude-haiku-4-5") == ("anthropic", "claude-haiku-4-5")
+def test_a_target_names_a_provider_and_optionally_a_model_and_an_effort() -> None:
+    assert parse("deepseek") == ("deepseek", None, None)
+    assert parse("anthropic:claude-haiku-5-5") == ("anthropic", "claude-haiku-5-5", None)
+    assert parse("anthropic:claude-haiku-5-5:off") == ("anthropic", "claude-haiku-5-5", "off")
+    assert parse("deepseek::low") == ("deepseek", None, "low")
+
+
+def test_an_effort_no_engine_knows_is_refused_before_anything_is_billed() -> None:
+    with pytest.raises(ConfigError, match="'fast'"):
+        parse("anthropic:claude-haiku-5-5:fast")
 
 
 async def test_every_target_is_called_once_per_round_taking_turns() -> None:
     calls: list[str] = []
 
-    def build(provider: str, model: str | None) -> LLM:
+    def build(provider: str, model: str | None, effort: Effort | None) -> LLM:
         llm = Reopening()
         original = llm.stream
 
@@ -50,7 +59,7 @@ async def test_every_target_is_called_once_per_round_taking_turns() -> None:
 async def test_each_target_connects_before_it_is_timed_as_the_agent_does() -> None:
     engines: list[FakeLLM] = []
 
-    def build(provider: str, model: str | None) -> LLM:
+    def build(provider: str, model: str | None, effort: Effort | None) -> LLM:
         engines.append(FakeLLM())
         return engines[-1]
 
@@ -61,7 +70,7 @@ async def test_each_target_connects_before_it_is_timed_as_the_agent_does() -> No
 
 
 async def test_a_provider_without_a_key_is_skipped_not_fatal() -> None:
-    def build(provider: str, model: str | None) -> LLM:
+    def build(provider: str, model: str | None, effort: Effort | None) -> LLM:
         if provider == "openai":
             raise ConfigError("OPENAI_API_KEY is not set. Put it in .env")
         return FakeLLM()
@@ -84,7 +93,7 @@ async def test_a_failing_call_is_counted_and_the_others_carry_on() -> None:
             async for fragment in super().stream(system, messages, usage):
                 yield fragment
 
-    results = await run(["x"], rounds=3, build=lambda p, m: Flaky())
+    results = await run(["x"], rounds=3, build=lambda p, m, e: Flaky())
 
     assert len(results[0].samples) == 2
     assert results[0].errors == ["overloaded"]

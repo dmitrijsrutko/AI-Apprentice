@@ -23,11 +23,11 @@ from voice_agent.errors import ProviderError
 from voice_agent.llm.anthropic_provider import ANTHROPIC_API_KEY
 from voice_agent.llm.http import http_client
 
-MAX_OUTPUT_TOKENS = 400
-"""A short screen summary and a few events, for a model that does not think
-first (Haiku). Output is most of a reading's time (Haiku, live: 230-376
-tokens took 2.0-4.7 s), so the prompt asks for 60 words and this stops a
-reading that ignores it, before it costs the conversation."""
+MAX_OUTPUT_TOKENS = 1200
+"""A short screen summary and a few events, plus room for whatever thinking the
+option allows: thinking counts against it, and with it off Haiku 5.5 still
+writes up to ~410 tokens on a busy screen. The prompt asks for 60 words; this
+stops a reading that ignores it, before it costs the conversation."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,24 +39,28 @@ class Option:
     title: str
     hint: str
     effort: str | None = None
-    """Sent as `output_config.effort` when set. Sonnet thinks by default, and
-    thinking before describing a screen is time the conversation waits for."""
+    """Sent as `output_config.effort` when set; `off` switches thinking off
+    instead (`thinking: disabled`, which Haiku 5.5 takes and Sonnet 5.5 does
+    not). Both think by default, and thinking before describing a screen is
+    time the conversation waits for."""
     max_tokens: int = MAX_OUTPUT_TOKENS
     """Thinking counts against it: a model that thinks first needs room for
     that as well as the JSON, or the reading is cut off mid-object."""
 
 
 MENU: tuple[Option, ...] = (
-    Option(
-        "sonnet-5-5", "claude-sonnet-5-5", "Sonnet 5.5", "balanced", effort="low", max_tokens=1200
-    ),
-    Option("haiku-4-5", "claude-haiku-4-5", "Haiku 4.5", "legacy, fastest"),
+    Option("haiku-5-5", "claude-haiku-5-5", "Haiku 5.5", "fastest", effort="off"),
+    Option("sonnet-5-5", "claude-sonnet-5-5", "Sonnet 5.5", "balanced", effort="low"),
 )
-"""The first is the default. Sonnet, because a shared window shrunk to 1024 px
-leaves a date about 7 px tall: on the frames of a live session Haiku read
-"Fri, 16 Oct" as 10 and 18, Sonnet as 16 every time, and no slower."""
+"""The first is the default, fastest first as on the reply menu. Haiku 5.5 with
+thinking off reads as well as Sonnet with the close-up, in two thirds of the
+time; at `low` it thinks first and is slower than Sonnet. Sonnet is the pick
+for small text read without a close-up (`docs/eyes-eval.md`)."""
 
 BY_NAME = {option.name: option for option in MENU}
+
+RENAMED: dict[str, str] = {"haiku-4-5": "haiku-5-5"}
+"""As `registry.RENAMED`, for the eyes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +168,9 @@ class AnthropicVision:
             content += [image(crop), {"type": "text", "text": CLOSE_UP}]
         content.append({"type": "text", "text": f"The previous screen was: {before}"})
         extra: dict[str, Any] = {}
-        if self._effort is not None:
+        if self._effort == "off":
+            extra["thinking"] = {"type": "disabled"}
+        elif self._effort is not None:
             extra["output_config"] = {"effort": self._effort}
         try:
             message = await self._client.messages.create(
@@ -181,6 +187,10 @@ class AnthropicVision:
             )
         except AnthropicError as exc:
             raise ProviderError(f"vision request failed: {exc}") from exc
+        if message.stop_reason == "refusal":
+            # A safety classifier declined: the reply has no reading in it, and an
+            # empty `Seen` would tell the conversation the screen is blank.
+            raise ProviderError("vision request declined by the model's safeguards")
         if message.stop_reason == "max_tokens":
             # A reading cut off mid-JSON would be "repaired" into a screen with
             # half its values and none of its events: no reading at all is safer.

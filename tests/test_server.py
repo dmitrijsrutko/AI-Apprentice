@@ -1089,7 +1089,7 @@ def test_the_page_offers_only_models_this_deployment_has_keys_for(
     assert isinstance(choices, dict)
 
     assert [o["name"] for o in choices["llm"]] == [
-        "haiku-4-5",
+        "haiku-5-5",
         "sonnet-5-5",
         "opus-5-5",
         "deepseek-off",
@@ -1200,7 +1200,7 @@ def test_an_unknown_or_keyless_choice_falls_back_to_the_default(
     with client.websocket_connect(f"/ws/{key}{query}") as socket:
         receive(socket)
 
-    assert store.get(key).engine == "haiku-4-5"
+    assert store.get(key).engine == "haiku-5-5"
 
 
 def test_the_page_names_the_model_each_option_would_actually_run(
@@ -1218,7 +1218,7 @@ def test_the_page_names_the_model_each_option_would_actually_run(
     assert isinstance(choices, dict)
     advertised = {o["name"]: (o["title"], o["model"]) for o in choices["llm"]}
 
-    assert advertised["haiku-4-5"] == ("Haiku 4.5", "claude-haiku-4-5")
+    assert advertised["haiku-5-5"] == ("Haiku 5.5", "claude-haiku-5-5")
     assert advertised["opus-5-5"] == ("Opus 5.5", "claude-opus-5-5")
     assert advertised["deepseek-high"] == ("V4.1 Flash", "deepseek-flash")
     hints = {o["name"]: o["hint"] for o in choices["llm"]}

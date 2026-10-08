@@ -23,7 +23,7 @@ from voice_agent import judge as judging
 from voice_agent.conversation import Conversation
 from voice_agent.llm import LLM, create_llm
 from voice_agent.llm import vision as eyes_menu
-from voice_agent.llm.registry import BY_NAME, Choice, default_choice, offered
+from voice_agent.llm.registry import BY_NAME, RENAMED, Choice, default_choice, offered
 from voice_agent.llm.traced import Traced
 from voice_agent.llm.vision import Vision, create_vision
 from voice_agent.roles import NO_ROLE, Role
@@ -120,8 +120,11 @@ class Backends:
         unavailable name falls back to the default rather than refusing: this is
         a URL anyone can type, and the `ready` frame says what actually ran.
         """
+        if conversation.engine is not None:
+            conversation.engine = RENAMED.get(conversation.engine, conversation.engine)
         if conversation.engine is None:
             wanted = asked.get("llm", "")
+            wanted = RENAMED.get(wanted, wanted)
             conversation.engine = wanted if wanted in self._names else self.default_engine
             heard = asked.get("stt", "")
             conversation.ears = heard if heard in self.listeners else self.default_ears
@@ -141,8 +144,11 @@ class Backends:
     def eyes_for(self, conversation: Conversation, asked: Mapping[str, str]) -> str | None:
         """The eyes this conversation sees with, pinned on first connect; `None`
         when this deployment offers none."""
+        if conversation.eyes is not None:
+            conversation.eyes = eyes_menu.RENAMED.get(conversation.eyes, conversation.eyes)
         if conversation.eyes is None and self.eyes:
             wanted = asked.get("eyes", "")
+            wanted = eyes_menu.RENAMED.get(wanted, wanted)
             names = {option.name for option in self.eyes}
             conversation.eyes = wanted if wanted in names else self.eyes[0].name
         return conversation.eyes

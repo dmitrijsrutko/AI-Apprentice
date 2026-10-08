@@ -5,6 +5,8 @@ import asyncio
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,8 +15,9 @@ from tests.conftest import FakeLLM
 from voice_agent import eyes as eyes_module
 from voice_agent import timing
 from voice_agent.conversation import Conversation
+from voice_agent.errors import ProviderError
 from voice_agent.eyes import Eyes
-from voice_agent.llm.vision import Seen, parse
+from voice_agent.llm.vision import AnthropicVision, Option, Seen, parse
 from voice_agent.server import create_app
 from voice_agent.sessions import SessionStore
 
@@ -96,7 +99,7 @@ async def test_a_frame_while_not_sharing_is_dropped() -> None:
 
 
 async def test_what_was_seen_reaches_the_conversation_and_the_page() -> None:
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     conversation.add_user("let me show you")
     page = Page()
     noticed: list[str | None] = []
@@ -119,7 +122,7 @@ async def test_what_was_seen_reaches_the_conversation_and_the_page() -> None:
 
 
 async def test_a_result_for_a_stopped_share_is_not_kept() -> None:
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     vision = FakeVision(delay=0.05)
     eyes = Eyes(vision, conversation, Page())
     await eyes.share(True, "window", "")
@@ -133,7 +136,7 @@ async def test_a_result_for_a_stopped_share_is_not_kept() -> None:
 
 
 async def test_resharing_starts_afresh_on_the_new_surface() -> None:
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     vision = FakeVision()
     eyes = Eyes(vision, conversation, Page())
     await eyes.share(True, "browser", "one")
@@ -149,7 +152,7 @@ async def test_resharing_starts_afresh_on_the_new_surface() -> None:
 
 
 def test_the_context_carries_what_was_seen_and_whether_it_can_see() -> None:
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     first = conversation.add_user("I'm opening the search")
     from voice_agent.conversation import Glimpse
 
@@ -201,7 +204,7 @@ def test_the_page_shares_a_screen_over_the_socket(client: TestClient) -> None:
     with client.websocket_connect(f"/ws/{key}?eyes=sonnet-5-5") as socket:
         ready = socket.receive_json()
         assert ready["eyes"] == {"interval": 1.0, "min_cells": 2}
-        assert [o["name"] for o in ready["choices"]["eyes"]] == ["sonnet-5-5", "haiku-4-5"]
+        assert [o["name"] for o in ready["choices"]["eyes"]] == ["haiku-5-5", "sonnet-5-5"]
         while socket.receive_json()["type"] != "greeting":
             pass
         socket.send_text(json.dumps({"type": "share", "active": True, "surface": "browser"}))
@@ -234,7 +237,7 @@ async def test_a_screen_change_keeps_listening_open_but_is_not_speech() -> None:
 def test_notes_stay_where_they_were_seen_when_a_reply_is_cut() -> None:
     from voice_agent.conversation import Glimpse
 
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     conversation.add_user("look")
     reply = conversation.add_assistant("Here is a long answer")
     conversation.seen.append(Glimpse(reply, "0:09", "", ("opened invoice 4471",)))
@@ -249,7 +252,7 @@ def test_notes_stay_where_they_were_seen_when_a_reply_is_cut() -> None:
 def test_only_the_latest_screen_notes_are_resent() -> None:
     from voice_agent.conversation import SCREEN_NOTES, Glimpse
 
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     first = conversation.add_user("go")
     for n in range(100):
         conversation.seen.append(Glimpse(first, "0:01", "", (f"change {n}",)))
@@ -310,7 +313,7 @@ async def test_a_reading_overtaken_by_a_newer_one_is_dropped(
 ) -> None:
 
     monkeypatch.setattr(eyes_module, "STAGGER_SECONDS", 0.0)
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     vision = FakeVision()
     vision.delays = {b"old": 0.2, b"new": 0.02}
     eyes = Eyes(vision, conversation, Page())
@@ -364,7 +367,7 @@ async def test_speech_starting_asks_the_eyes_to_look() -> None:
 
 
 async def test_a_change_reported_by_both_overlapping_readings_is_kept_once() -> None:
-    conversation = Conversation(id="t", eyes="haiku-4-5")
+    conversation = Conversation(id="t", eyes="haiku-5-5")
     noticed: list[str | None] = []
     eyes = Eyes(FakeVision(), conversation, Page(), noticed.append)
     await eyes.share(True, "browser", "")
@@ -574,3 +577,48 @@ def test_a_bad_close_up_still_reads_the_frame(client: TestClient) -> None:
         seen = socket.receive_json()
 
         assert seen["type"] == "seen" and seen["crop"] is False
+
+
+def answering(stop_reason: str, text: str, calls: list[dict[str, Any]]) -> Any:
+    """A client whose `messages.create` records the request and returns one reply."""
+
+    async def create(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return SimpleNamespace(
+            stop_reason=stop_reason,
+            content=[SimpleNamespace(type="text", text=text)] if text else [],
+            usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        )
+
+    return SimpleNamespace(messages=SimpleNamespace(create=create))
+
+
+@pytest.mark.parametrize(
+    ("effort", "sent"),
+    [
+        ("off", {"thinking": {"type": "disabled"}}),
+        ("low", {"output_config": {"effort": "low"}}),
+        (None, {}),
+    ],
+)
+async def test_the_eyes_ask_for_their_effort_or_for_no_thinking(
+    effort: str | None, sent: dict[str, Any]
+) -> None:
+    """`off` is a separate switch, not an effort level: sent as `thinking`, with
+    no `output_config` beside it."""
+    calls: list[dict[str, Any]] = []
+    option = Option("x", "claude-haiku-5-5", "X", "", effort=effort)
+    vision = AnthropicVision(option, answering("end_turn", '{"screen": "s"}', calls))
+
+    await vision.look(b"jpeg", "")
+
+    assert {k: calls[0][k] for k in ("thinking", "output_config") if k in calls[0]} == sent
+
+
+async def test_a_declined_reading_is_an_error_not_a_blank_screen() -> None:
+    calls: list[dict[str, Any]] = []
+    option = Option("x", "claude-haiku-5-5", "X", "")
+    vision = AnthropicVision(option, answering("refusal", "", calls))
+
+    with pytest.raises(ProviderError, match="declined"):
+        await vision.look(b"jpeg", "")
