@@ -41,6 +41,11 @@ differs in every place that matters:
   `sync_alignment=true` is on the query string.
 - The server buffers to its **own fixed threshold** (~40 characters and 8 words)
   before the first partial audio; there is no `chunk_length_schedule` to set.
+- **Its first audio piece is short when fed tokens** (measured 2026-10-08): a
+  fixed 1233 ms, with the second piece ~1.25 s after the first audio, so the
+  join lands at the playhead and clicks. The first piece covers what the
+  service holds when it starts: handing over ≥120 characters as the first
+  `inputs` made it 2.5–5 s (`FIRST_BATCH_CHARS`, Chapter 10).
 - Concurrency: a dialogue socket holds one session from a **separate pool** for
   its whole lifetime, where a TTS socket counts against the plan's limit only
   while it is generating. This project opens one per reply, so four live

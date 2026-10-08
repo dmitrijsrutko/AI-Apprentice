@@ -15,6 +15,71 @@ Newest chapter first. Each entry says *why* the chapter was the right next
 step — the diff already says what changed. The chapter entry format is
 specified in [AGENTS.md](AGENTS.md#5-documentation-is-part-of-every-chapter).
 
+## Chapter 10 — Smooth voice: the first words go to the voice as one batch
+
+A glitch the user heard "many times": the first words fine, then a click or a
+short stick, "like gluing two voice messages together", then smooth speech.
+The live traces agree. In **40% of replies (164/408)** the page's player ran
+dry for 50–100 ms, a hard step to silence and back. That happened in 99–100%
+of the replies where the server saw the voice arrive late, against 6% of the
+rest. In 175 of 177 late replies the lateness peaked within the first 30
+characters. Screen sharing, the reply engine and sample alignment made no
+difference.
+
+**The cause, measured locally on 12 real replies.** v4 Turbo voices a reply in
+pieces, and the second always arrives ~1.25 s after the first audio. Fed token
+by token, the first piece was a fixed 1233 ms, so that join landed at the
+playhead (−58 to +20 ms in 8 of 12): a gluing of two clips in the most literal
+sense. The first piece covers whatever text the service holds when it starts,
+and its socket has no schedule to set. So the fix is at the start of the
+chain, not the end: the adapter hands over the first ≥120 characters as one
+batch.
+
+**What changed**
+- **`tts/elevenlabs_dialogue_tts.py`:** `first_batch` gathers the reasoning engine's first `FIRST_BATCH_CHARS` (120), at most `FIRST_BATCH_WAIT_SECONDS` (0.4 s).
+  - It cuts at the last sentence or clause end (or spaced dash) in the second half of the batch.
+  - After the batch, every fragment goes as written. A shorter reply goes whole.
+  - The wait never cancels the fragment being written.
+- **`web/playback-worklet.js`:**
+  - Playback starts once 150 ms of audio is queued (`START_MS`), not on the first chunk. That chunk is 32 ms, and the rest of the burst follows within ~40 ms.
+  - A dropout fades out and back in over 48 samples (2 ms), so a leftover gap is a dip, never a click. A stream that never runs dry is bit-for-bit unchanged.
+  - `finished` reports where the first gap began (`firstGapMs`).
+- **`web/player.js`, `server.py`:** `first_gap_ms` travels with the playback report, into the log and the record ("…, the first at 1233 ms"). The report's numbers pass through `count`: `NaN`, `Infinity` (which Python's JSON accepts) or a `bool` is ignored rather than ending the socket.
+
+**Design decisions**
+- **Batch the text, not the audio** (the user's call). Measured, by how the first text is handed over:
+
+  | First text sent as | First sound | First piece (p50 / min) | Joins with <150 ms to spare |
+  |---|---|---|---|
+  | tokens (before) | 236 ms | 1233 / 1233 ms | 8 / 12 |
+  | ≥80 characters | 307 ms | 2530 / 1233 ms | 2 / 12 |
+  | **≥120 characters** | **369 ms** | **5092 / 2530 ms** | **0 / 12** |
+  | the whole reply | ~395 ms | 7653 / ~4000 ms | 0 / 12 |
+
+  A player-side hold would pay the same wait and only mask the join: the burst of the first piece fills any audio threshold at once, so it would have to be a fixed delay. Switching to Flash v2.5 (0 gaps; its schedule already starts at 120) would trade away the expressive voice.
+- **Fades only at the edges of a dropout**, so they cannot colour normal speech.
+- **The start threshold came from production.** After the first deploy, one live conversation (29 replies) had dropouts in 3 replies, against 40% before. Two began at 32 ms, after the voice's first 32 ms chunk alone; one at 1233 ms, on a 46-character reply.
+  - Waiting for 150 ms of audio costs +17 ms p50 (p90 35, max 71; 22 replies through the shipped adapter).
+  - A timed hold was rejected: this waits for audio, not the clock.
+- **`flush` does not help short replies.** Tried after the first batch, on 10 short and 12 long real replies: the first piece is unchanged. A reply of ~50 characters or less (about 3 s of speech) is still split at 1233 ms: 1 of 10 short replies. Dropped.
+
+**Latency impact** (measured locally, through the shipped adapter, unless marked live):
+- First sound p50 **236 → ~370 ms** on v4 Turbo, at most +400 ms by construction, plus +17 ms p50 for the start threshold.
+- Live, synthesis first byte with the first batch: **257 ms p50, 409 ms p90** (29 replies). The reasoning engine's text often arrives in a burst, so the batch seldom waits long.
+- Tightest join afterwards: 1175 ms ahead (0/24 tight).
+- Flash v2.5's synthesis is unchanged; only the 150 ms start applies to it.
+
+**Deliberately not done**
+- Very short replies (≤ ~50 characters): v4 Turbo still splits them after its first 1233 ms, whatever is sent. The join is tight, now faded rather than clicked. A timed hold would cure it at a cost to every reply.
+- v4 Turbo's later joins: they measured seconds ahead.
+- A fade at the very end of a reply.
+
+**Verification**
+- `uv run verify` passes (1007 tests, node included).
+- The new tests failed first: batching, cut, a short reply, a stalled engine, fades, the first gap's position, and the server log.
+- Real synthesis as above.
+- In production, after the first batch alone: dropouts in 10% of replies (3/29, one conversation), against 40%. The start threshold is not yet deployed.
+
 ## Chapter 9 — The apprentice asks to see: screen sharing invited, not assumed
 
 The apprentice learns best by watching, but nothing told a newcomer it could

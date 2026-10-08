@@ -9,22 +9,24 @@ entries, a reply ends with `close_socket` rather than an empty text, responses
 are snake_case, and the service buffers to its own fixed threshold (~40
 characters and 8 words) with no `chunk_length_schedule` to set.
 
-The contract is the sibling's, unchanged: one fragment in as the reasoning
-engine writes it, whole samples out, and where a reply is cut is the service's
-decision, not this project's. One reply is one socket, which is why `new_turn`
-is never sent: a reply is a turn.
+The contract is the sibling's, with one difference: the first words go as one
+batch of at least `FIRST_BATCH_CHARS`, and after it each fragment as the
+reasoning engine writes it. Whole samples come out, and where a reply is cut is
+the service's decision, not this project's. One reply is one socket, which is
+why `new_turn` is never sent: a reply is a turn.
 """
 
 import asyncio
 import base64
 import contextlib
 import json
+import re
 from collections.abc import AsyncIterator
 from urllib.parse import urlencode
 
 import websockets
 
-from voice_agent import trace
+from voice_agent import timing, trace
 from voice_agent.config import require_env
 from voice_agent.errors import ProviderError
 from voice_agent.tts.base import MEDIA_TYPE, Alignment, AudioChunk, whole_samples
@@ -48,6 +50,96 @@ SYNC_ALIGNMENT = "true"
 `sync_alignment` is set, and without it "what the user actually heard" after an
 interruption degrades to an estimate. Every probe here had it on, so the
 negative is the vendor's word rather than this project's measurement."""
+
+
+FIRST_BATCH_CHARS = 120
+"""The first text handed over is at least this long, as one `inputs` message.
+
+The service voices a reply in pieces, and the second always arrives about
+1.25 s after the first audio. Fed token by token, its first piece was a fixed
+1233 ms of audio, so that join landed at the playhead: any network delay to the
+browser left a hole, a click a word or two in (40% of live replies). The first
+piece covers what the service holds when it starts. Measured on 12 real
+replies, the first piece / the tightest join / first sound:
+
+- tokens:            1233 ms / 8 of 12 with <150 ms to spare / 236 ms
+- 80 characters:     2530 ms / 2 of 12 / 307 ms
+- 120 characters:    5092 ms / none, at least 1150 ms to spare / 369 ms
+- the whole reply:   7653 ms / none / ~395 ms
+"""
+
+FIRST_BATCH_WAIT_SECONDS = 0.4
+"""The most the first batch waits for text, from its first fragment: a slow or
+stalling reasoning engine never holds the voice back longer than this."""
+
+CLAUSE_END = re.compile(r"[.?!,;:]\s|\s—\s")
+"""Where speech may pause: punctuation before a space, or a spaced dash, which
+replies lean on ("Got it — …")."""
+
+
+async def first_batch(text: AsyncIterator[str], least: int, wait: float) -> AsyncIterator[str]:
+    """The first `least` characters as one piece, then every fragment as written.
+
+    The batch is cut at the last sentence or clause end in its second half, else
+    at the last space, so the first piece ends where speech may pause; what is
+    past the cut follows at once. The wait is on a task, not on `__anext__`
+    itself, so running out of time never cancels the fragment being written.
+    """
+    fragments = aiter(text)
+    held = ""
+    started: float | None = None
+    pending: asyncio.Future[str] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(anext(fragments))
+            left = None if started is None else wait - (timing.now() - started)
+            done, _ = await asyncio.wait({pending}, timeout=None if left is None else max(0, left))
+            if not done:
+                break  # out of time: send what there is
+            try:
+                fragment = pending.result()
+            except StopAsyncIteration:
+                pending = None
+                break
+            pending = None
+            if not fragment:
+                continue
+            held += fragment
+            started = timing.now() if started is None else started
+            if len(held) >= least:
+                break
+        if held:
+            # Cut only a batch that closed on length: one that ran out of text
+            # or of time goes whole, since nothing more is on its way yet.
+            cut = cut_at(held) if len(held) >= least else len(held)
+            yield held[:cut]
+            if held[cut:]:
+                yield held[cut:]
+        if pending is not None:
+            try:
+                fragment = await pending
+            except StopAsyncIteration:
+                return
+            finally:
+                pending = None
+            if fragment:
+                yield fragment
+        async for fragment in fragments:
+            yield fragment
+    finally:
+        if pending is not None:
+            pending.cancel()
+
+
+def cut_at(held: str) -> int:
+    """Where to end the first batch: after the last sentence or clause end in its
+    second half, else after the last space, else nowhere (the whole batch)."""
+    ends = [m.end() for m in CLAUSE_END.finditer(held)]
+    if ends and ends[-1] >= len(held) // 2:
+        return ends[-1]
+    space = held.rfind(" ") + 1
+    return space if space > 0 else len(held)
 
 
 def dialogue_alignment(raw: object) -> Alignment | None:
@@ -129,7 +221,7 @@ class ElevenLabsDialogueTTS:
             # The first message registers the voice. v4 Turbo allows exactly one
             # per connection, and one reply is one voice.
             await socket.send(json.dumps({"voices": [self.voice]}))
-            async for fragment in text:
+            async for fragment in first_batch(text, FIRST_BATCH_CHARS, FIRST_BATCH_WAIT_SECONDS):
                 # An empty text is not this protocol's terminator — `close_socket`
                 # is — but an empty `inputs` entry would still be nothing to say.
                 if fragment:

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { POSITION_QUANTA, PcmQueue, createPlayback } from "../../src/voice_agent/web/playback-worklet.js";
+import { FADE_SAMPLES, POSITION_QUANTA, PcmQueue, START_MS, createPlayback } from "../../src/voice_agent/web/playback-worklet.js";
 
 const quantum = () => new Float32Array(4);
 const samples = (...values) => Float32Array.from(values);
@@ -22,13 +22,100 @@ test("samples come out in order across chunk boundaries, with no seams", () => {
   assert.deepEqual([...a, ...b], [1, 2, 3, 4, 5, 6, 7, 8]);
 });
 
-test("a shortfall is filled with silence", () => {
+test("a shortfall is filled with silence, the audio before it fading out", () => {
   const q = new PcmQueue();
-  q.push(samples(1, 2));
+  q.push(samples(1, 1));
   const out = Float32Array.from([9, 9, 9, 9]);
 
   assert.equal(q.pull(out), 2);
-  assert.deepEqual([...out], [1, 2, 0, 0]);
+  assert.deepEqual([...out].map((v) => +v.toFixed(3)), [0.667, 0.333, 0, 0]);
+});
+
+test("running dry ramps down to silence and back up, never a step", () => {
+  const q = new PcmQueue();
+  const ones = (n) => new Float32Array(n).fill(1);
+  q.push(ones(FADE_SAMPLES * 2));
+  const out = new Float32Array(FADE_SAMPLES * 3);
+  q.pull(out);  // runs dry a third of the way from the end
+  const before = [...out.subarray(0, FADE_SAMPLES * 2)];
+  assert.equal(before[0], 1, "audio well before the edge was touched");
+  assert.ok(before.at(-1) < 0.05, `the last sample before the gap is ${before.at(-1)}, a click`);
+  for (let i = 1; i < before.length; i++) assert.ok(before[i] <= before[i - 1], "not a ramp down");
+
+  q.push(ones(FADE_SAMPLES * 2));
+  const after = new Float32Array(FADE_SAMPLES * 2);
+  q.pull(after);
+  assert.ok(after[0] < 0.05, `the first sample after the gap is ${after[0]}, a click`);
+  for (let i = 1; i < FADE_SAMPLES; i++) assert.ok(after[i] >= after[i - 1], "not a ramp up");
+  assert.equal(after.at(-1), 1, "audio well after the edge was touched");
+});
+
+test("a stream that never runs dry comes out bit for bit", () => {
+  const q = new PcmQueue();
+  const input = Float32Array.from({ length: 300 }, (_, i) => Math.sin(i / 7));
+  q.push(input.slice(0, 150));
+  q.push(input.slice(150));
+  q.end();
+  const out = new Float32Array(300);
+  q.pull(out);
+
+  assert.deepEqual([...out], [...input]);
+});
+
+test("where the first gap began is kept, in samples played", () => {
+  const q = new PcmQueue();
+  q.push(samples(1, 2, 3, 4, 5, 6));
+  q.pull(quantum());
+  q.pull(quantum());  // dry after 6
+  q.push(samples(1, 2, 3, 4, 5, 6));
+  q.pull(quantum());
+  q.pull(quantum());  // dry again after 12
+
+  assert.equal(q.firstGapAt, 6);
+});
+
+test("nothing plays until enough audio is queued to ride out the first chunk's jitter", () => {
+  // v4 Turbo's first chunk is 32 ms; started on it alone, a next chunk a few
+  // ms late on the network made the very first syllable stutter.
+  const q = new PcmQueue(8);
+  q.push(samples(1, 2, 3));            // the tiny first chunk
+  const out = quantum();
+  assert.equal(q.pull(out), 0);
+  assert.deepEqual([...out], [0, 0, 0, 0]);
+  q.push(samples(4, 5, 6, 7, 8));      // the rest of the burst
+  assert.equal(q.pull(out), 4);
+  assert.deepEqual([...out], [1, 2, 3, 4]);
+  assert.equal(q.gaps, 0, "waiting to start counted as a gap");
+});
+
+test("a stream that ends shorter than the start threshold plays at once, in full", () => {
+  const q = new PcmQueue(100);
+  q.push(samples(1, 2, 3));
+  q.end();
+  const out = quantum();
+  assert.equal(q.pull(out), 3);
+  assert.deepEqual([...out], [1, 2, 3, 0]);
+});
+
+test("the threshold is only for the start: a stream that ran dry resumes on any audio", () => {
+  const q = new PcmQueue(4);
+  q.push(samples(1, 2, 3, 4));
+  q.pull(quantum());
+  q.pull(quantum());                   // dry
+  q.push(samples(5));
+  assert.equal(q.pull(quantum()), 1);
+});
+
+test("real playback starts at the threshold, a quantum boundary or two after the burst", () => {
+  const posted = [];
+  const p = createPlayback((msg) => posted.push(msg), 1000);  // 1 sample = 1 ms
+  p.message({ type: "start", stream: 1 });
+  p.message({ type: "chunk", stream: 1, samples: new Float32Array(32).fill(0.5) });
+  for (let i = 0; i < 10; i++) p.process(quantum());
+  assert.equal(posted.length, 0, `played on a ${32} ms chunk alone`);
+  p.message({ type: "chunk", stream: 1, samples: new Float32Array(START_MS).fill(0.5) });
+  p.process(quantum());
+  assert.deepEqual(posted, [{ type: "playing", stream: 1 }]);
 });
 
 test("silence before the first sample is waiting, not a gap", () => {
@@ -128,7 +215,8 @@ test("chunks pushed while earlier ones play come out in order through compaction
 
 function processor() {
   const posted = [];
-  const p = createPlayback((msg) => posted.push(msg), 1000);
+  // Started on the first sample: these tests are about everything after it.
+  const p = createPlayback((msg) => posted.push(msg), 1000, 0);
   return { p, posted, render: (n = 1) => { for (let i = 0; i < n; i++) p.process(quantum()); } };
 }
 
@@ -143,7 +231,7 @@ test("the processor reports audible once, then finished after end and the last s
   assert.equal(posted.length, 1, "finished before the last samples played");
   render();
 
-  assert.deepEqual(posted.at(-1), { type: "finished", stream: 1, gaps: 0, gapMs: 0 });
+  assert.deepEqual(posted.at(-1), { type: "finished", stream: 1, gaps: 0, gapMs: 0, firstGapMs: null });
 });
 
 test("gaps are reported in milliseconds at the context rate", () => {
@@ -155,7 +243,8 @@ test("gaps are reported in milliseconds at the context rate", () => {
   p.message({ type: "end", stream: 1 });
   render();
 
-  assert.deepEqual(posted.at(-1), { type: "finished", stream: 1, gaps: 1, gapMs: 10 });
+  // At 1000 Hz a sample is a millisecond: the gap began 2 ms into the audio.
+  assert.deepEqual(posted.at(-1), { type: "finished", stream: 1, gaps: 1, gapMs: 10, firstGapMs: 2 });
 });
 
 test("a new stream replaces the old one, and messages for the old one are ignored", () => {

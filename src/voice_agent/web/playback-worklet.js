@@ -10,9 +10,25 @@
 // The logic is exported so node can execute it; the processor class at the
 // bottom exists only inside an AudioWorkletGlobalScope.
 
+// How many samples a dropout is faded over, on each side (2 ms at 24 kHz): a
+// step from speech to silence, or back, is a click; a ramp this short is not
+// heard as one. Only edges of a dropout are touched; a stream that never runs
+// dry comes out bit for bit.
+export const FADE_SAMPLES = 48;
+
+// How much audio a stream holds before it starts playing. v4 Turbo's first
+// chunk is 32 ms: started on it alone, a next chunk a few ms late on the
+// network stuttered the first syllable. The rest of its first piece follows in
+// a burst within ~40 ms, so this waits for audio already on its way, not for
+// the clock (measured on 22 replies: +17 ms p50, +35 ms p90, +71 ms at most).
+export const START_MS = 150;
+
 // Float samples in arrival order, read out in fixed-size quanta with no seams.
+// `startSamples`: how many must be queued before the first is played.
 export class PcmQueue {
-  constructor() {
+  constructor(startSamples = 0) {
+    this.startSamples = startSamples;
+    this.queued = 0;        // samples pushed and not yet read
     this.chunks = [];
     this.head = 0;          // index of the chunk being read
     this.offset = 0;        // samples already read from that chunk
@@ -21,10 +37,15 @@ export class PcmQueue {
     this.dry = false;       // is the queue currently starved
     this.gaps = 0;
     this.gapFrames = 0;
+    this.read = 0;          // real samples read out so far
+    this.firstGapAt = null; // samples read when the first gap began
   }
 
   push(samples) {
-    if (samples.length) this.chunks.push(samples);
+    if (samples.length) {
+      this.chunks.push(samples);
+      this.queued += samples.length;
+    }
   }
 
   end() {
@@ -39,6 +60,10 @@ export class PcmQueue {
   // the first sample and the end of the stream is a gap: the network fell
   // behind playback. Returns how many samples were real audio.
   pull(out) {
+    if (!this.started && !this.ended && this.queued < this.startSamples) {
+      out.fill(0);  // waiting to start, which is not a gap
+      return 0;
+    }
     let written = 0;
     while (written < out.length && this.head < this.chunks.length) {
       const chunk = this.chunks[this.head];
@@ -66,13 +91,34 @@ export class PcmQueue {
     }
     out.fill(0, written);
 
+    // The fades see a dry spell that begins partway through a quantum. One that
+    // began exactly on a quantum boundary would step unfaded; measured, none of
+    // 242 pauses in a voice's arrival ended on one, so it is left.
+    const missing = out.length - written;
+    const resuming = written > 0 && this.dry;
+    const runningDry = missing > 0 && written > 0 && !this.ended;
+    if (resuming) {
+      // Back from a dropout: ramp up from silence rather than step into speech.
+      const n = Math.min(written, FADE_SAMPLES);
+      for (let i = 0; i < n; i++) out[i] *= (i + 1) / (n + 1);
+    }
+    if (runningDry) {
+      // About to fall silent: ramp the last of the audio down to it.
+      const n = Math.min(written, FADE_SAMPLES);
+      for (let i = 0; i < n; i++) out[written - n + i] *= (n - i) / (n + 1);
+    }
+
     if (written > 0) {
       this.started = true;
       this.dry = false;
     }
-    const missing = out.length - written;
+    this.read += written;
+    this.queued -= written;
     if (missing && this.started && !this.ended) {
-      if (!this.dry) this.gaps += 1;
+      if (!this.dry) {
+        this.gaps += 1;
+        if (this.firstGapAt === null) this.firstGapAt = this.read;
+      }
       this.dry = true;
       this.gapFrames += missing;
     }
@@ -93,14 +139,15 @@ export const POSITION_QUANTA = 8;
 // Here -> page:  playing {stream} once audio is audible · finished {stream, gaps, gapMs}
 //                stopped {stream, played} — samples played, or null if it had already finished
 //                position {stream, played} — samples played so far, while playing
-export function createPlayback(post, rate) {
+export function createPlayback(post, rate, startMs = START_MS) {
+  const startSamples = Math.round((startMs * rate) / 1000);
   let stream = null;  // { id, queue, playing, played }
 
   return {
     message(msg) {
       if (msg.type === "start") {
         // A new stream replaces whatever was playing, immediately.
-        stream = { id: msg.stream, queue: new PcmQueue(), playing: false, played: 0, quanta: 0 };
+        stream = { id: msg.stream, queue: new PcmQueue(startSamples), playing: false, played: 0, quanta: 0 };
         return;
       }
       if (msg.type === "stop") {
@@ -144,6 +191,10 @@ export function createPlayback(post, rate) {
           stream: s.id,
           gaps: s.queue.gaps,
           gapMs: Math.round((s.queue.gapFrames * 1000) / rate),
+          // Where in the reply it first ran dry: about 1.2 s in is a join between
+          // the voice's pieces, anywhere else a network stall.
+          firstGapMs:
+            s.queue.firstGapAt === null ? null : Math.round((s.queue.firstGapAt * 1000) / rate),
         });
       }
     },

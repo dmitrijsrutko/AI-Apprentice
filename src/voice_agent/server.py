@@ -829,6 +829,17 @@ def close_up(data: object) -> bytes | None:
         return None
 
 
+def count(value: object) -> int | None:
+    """A whole number from the page, or `None`. Python's JSON reads `NaN` and
+    `Infinity`, and `int()` of either raises, which would end the socket; a
+    `bool` is an `int` too, but not a count."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if not math.isfinite(value):
+        return None
+    return int(value)
+
+
 async def handle_text(
     channel: Channel,
     session: Session,
@@ -858,14 +869,20 @@ async def handle_text(
         # the browser can see them, and a stutter nobody logs is a stutter
         # nobody fixes. Coerced first: these are client-supplied, and a string
         # logged verbatim can forge log lines.
-        try:
-            gaps, gap_ms = int(payload.get("gaps", 0)), int(payload.get("gap_ms", 0))
-        except (TypeError, ValueError):
+        gaps, gap_ms = count(payload.get("gaps", 0)), count(payload.get("gap_ms", 0))
+        if gaps is None or gap_ms is None:
             return
+        # Where the first gap began: ~1.2 s in is a join between the voice's
+        # pieces (Chapter 10), anywhere else a network stall.
+        first_gap_ms = count(payload.get("first_gap_ms"))
         if gaps:
-            logger.info("playback stuttered: %d gaps, %d ms of silence", gaps, gap_ms)
+            where = f", the first at {first_gap_ms} ms" if first_gap_ms is not None else ""
+            logger.info("playback stuttered: %d gaps, %d ms of silence%s", gaps, gap_ms, where)
             if record is not None:
-                record.note(f"playback: gaps {gaps} · gap_ms {gap_ms}")
+                record.note(
+                    f"playback: gaps {gaps} · gap_ms {gap_ms}"
+                    + (f" · first_gap_ms {first_gap_ms}" if first_gap_ms is not None else "")
+                )
         return
 
     if kind == "share":

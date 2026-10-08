@@ -11,7 +11,8 @@ import { createPlayback } from "../../src/voice_agent/web/playback-worklet.js";
 // is running — as a real context renders nothing while suspended.
 function harness({ state = "running", muted = false } = {}) {
   const h = { made: [], speaking: [], waiting: [], finished: [], errors: [], muted };
-  const processor = createPlayback((msg) => h.node.port.onmessage({ data: msg }), 24000);
+  // Started on the first sample: the start threshold has tests of its own.
+  const processor = createPlayback((msg) => h.node.port.onmessage({ data: msg }), 24000, 0);
   // Messages cross the port by structured clone with transfer, exactly as they
   // cross threads in a browser: a transferred buffer is detached on this side.
   h.node = { port: { onmessage: null, postMessage: (msg, transfer = []) => processor.message(structuredClone(msg, { transfer })) } };
@@ -93,7 +94,7 @@ test("the gate closes when audio is audible and opens only after end and the las
   assert.equal(lastSpeaking(h), true, "released before the last sample played");
 
   h.render(3);
-  assert.deepEqual(h.speaking.at(-1), [false, { gaps: 0, gap_ms: 0 }]);
+  assert.deepEqual(h.speaking.at(-1), [false, { gaps: 0, gap_ms: 0, first_gap_ms: null }]);
   assert.equal(h.finished.length, 1);
   assert.equal(h.finished[0].bubble, "bubble");
 });
@@ -110,7 +111,7 @@ test("a reply that ran dry mid-stream reports its gap when it finishes", async (
 
   assert.equal(h.finished[0].gaps, 1);
   assert.equal(h.finished[0].gapMs, Math.round((10 * 128 - 480) * 1000 / 24000));
-  assert.deepEqual(h.speaking.at(-1), [false, { gaps: 1, gap_ms: h.finished[0].gapMs }]);
+  assert.deepEqual(h.speaking.at(-1), [false, { gaps: 1, gap_ms: h.finished[0].gapMs, first_gap_ms: 20 }]);
 });
 
 test("a suspended context waits for a gesture without holding the gate or dropping audio", async () => {

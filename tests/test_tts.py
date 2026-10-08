@@ -25,8 +25,11 @@ from voice_agent.tts.base import (
     whole_samples,
 )
 from voice_agent.tts.elevenlabs_dialogue_tts import (
+    FIRST_BATCH_CHARS,
+    FIRST_BATCH_WAIT_SECONDS,
     ElevenLabsDialogueTTS,
     dialogue_alignment,
+    first_batch,
 )
 from voice_agent.tts.elevenlabs_tts import (
     CHUNK_LENGTH_SCHEDULE,
@@ -342,7 +345,8 @@ async def test_audio_arrives_while_text_is_still_being_sent(endpoint: Serve) -> 
     async def slow_text() -> AsyncIterator[str]:
         nonlocal finished
         yield "ab"
-        await asyncio.sleep(0.2)
+        # Past the first batch's wait, so "ab" is sent while this sleeps.
+        await asyncio.sleep(FIRST_BATCH_WAIT_SECONDS + 0.2)
         yield "cd"
         finished = True
 
@@ -562,16 +566,73 @@ async def test_the_dialogue_registers_exactly_one_voice_and_the_key_in_a_header(
     assert service.headers == ["test-key"]
 
 
-async def test_dialogue_tokens_are_forwarded_exactly_as_the_reasoning_engine_wrote_them(
+async def collected(text: AsyncIterator[str]) -> list[str]:
+    return [part async for part in text]
+
+
+async def test_the_first_words_go_as_one_batch_cut_at_a_clause_then_fragments_as_written() -> None:
+    """v4 Turbo's first audio piece covers what it has when it starts. Fed
+    token by token it was a fixed 1233 ms, and the next piece landed at the
+    playhead: a click. A batch makes the first piece long enough to hide it."""
+    text = tokens("Got it — so ", "you book flights, ", "and the team ", "travels. ", "Why?")
+
+    sent = await collected(first_batch(text, least=40, wait=5))
+
+    assert sent == ["Got it — so you book flights, ", "and the team ", "travels. ", "Why?"]
+
+
+async def test_a_spaced_dash_is_a_pause_the_first_batch_may_end_on() -> None:
+    """Replies lean on "—" ("Got it — …"): the first piece should end there,
+    where speech pauses, rather than after an arbitrary word."""
+    text = tokens("Booking flights and hotels ", "for our team — good one", " to learn.")
+
+    sent = await collected(first_batch(text, least=40, wait=5))
+
+    assert sent == ["Booking flights and hotels for our team — ", "good one", " to learn."]
+
+
+async def test_a_reply_shorter_than_the_batch_goes_whole() -> None:
+    assert await collected(first_batch(tokens("Hi", "", " there."), least=40, wait=5)) == [
+        "Hi there."
+    ]
+
+
+async def test_a_batch_with_no_space_to_cut_at_goes_whole() -> None:
+    assert await collected(first_batch(tokens("x" * 30, "y" * 30), least=40, wait=5)) == [
+        "x" * 30 + "y" * 30
+    ]
+
+
+async def test_a_stalled_engine_holds_the_voice_back_no_longer_than_the_wait() -> None:
+    """And the fragment it was writing still arrives: the wait must not cancel it."""
+    got: list[tuple[str, float]] = []
+    started = time.perf_counter()
+
+    async def stalling() -> AsyncIterator[str]:
+        yield "Hello, "
+        await asyncio.sleep(0.3)
+        yield "world."
+
+    async for part in first_batch(stalling(), least=40, wait=0.1):
+        got.append((part, time.perf_counter() - started))
+
+    assert [part for part, _ in got] == ["Hello, ", "world."]
+    assert got[0][1] < 0.25, "the held text waited for the stalled engine"
+
+
+async def test_dialogue_sends_its_first_batch_then_the_fragments_as_written(
     dialogue_endpoint: ServeDialogue,
 ) -> None:
     service = DialogueInput(parts=[b"\x01\x02"])
     tts = await dialogue_endpoint(service)
+    words = [f"word{i} " for i in range(40)]
 
-    await collect(tts.stream(tokens("R", "iga", " is", "", " the capital.")))
+    await collect(tts.stream(tokens("R", "iga", " is", "", " the capital. ", *words)))
 
     texts = [entry["text"] for m in service.received if "inputs" in m for entry in m["inputs"]]
-    assert texts == ["R", "iga", " is", " the capital."]
+    assert len(texts[0]) >= FIRST_BATCH_CHARS // 2, "the first words went one fragment at a time"
+    assert texts[-1] == words[-1], "the fragments after the batch are not as written"
+    assert "".join(texts) == "Riga is the capital. " + "".join(words)
     assert all(
         entry["voice_id"] == DEFAULT_VOICE
         for m in service.received
@@ -630,7 +691,8 @@ async def test_dialogue_audio_arrives_while_text_is_still_being_sent(
     async def slow_text() -> AsyncIterator[str]:
         nonlocal finished
         yield "ab"
-        await asyncio.sleep(0.2)
+        # Past the first batch's wait, so "ab" is sent while this sleeps.
+        await asyncio.sleep(FIRST_BATCH_WAIT_SECONDS + 0.2)
         yield "cd"
         finished = True
 

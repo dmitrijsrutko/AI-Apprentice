@@ -620,6 +620,62 @@ def test_a_slow_first_token_is_logged_with_where_the_time_went(
     assert "accepted at 40 ms, 1 attempt(s)" in caplog.text
 
 
+def test_a_playback_stutter_is_logged_with_where_in_the_reply_it_began(
+    store: SessionStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Where the first gap began tells a join between the voice's pieces (about
+    1.2 s in, Chapter 10) from a network stall anywhere. Client-supplied, so a
+    value that is not a number is dropped rather than logged."""
+    client = TestClient(
+        create_app(llm=FakeLLM(), store=store, voice=False, ears=False, greeting="")
+    )
+    key = start(client)
+
+    with caplog.at_level(logging.INFO), client.websocket_connect(f"/ws/{key}") as socket:
+        socket.receive_json()
+        socket.send_json({"type": "playback", "active": True})
+        socket.send_json(
+            {"type": "playback", "active": False, "gaps": 1, "gap_ms": 64, "first_gap_ms": 1233}
+        )
+        socket.send_json({"type": "playback", "active": True})
+        socket.send_json(
+            {"type": "playback", "active": False, "gaps": 1, "gap_ms": 9, "first_gap_ms": "x\ny"}
+        )
+        socket.send_json({"type": "user_message", "text": "hello"})
+        drain(socket, audio=False)
+
+    assert "playback stuttered: 1 gaps, 64 ms of silence, the first at 1233 ms" in caplog.text
+    assert "playback stuttered: 1 gaps, 9 ms of silence\n" in caplog.text + "\n"
+    assert "x\ny" not in caplog.text
+
+
+def test_a_playback_report_with_numbers_that_are_not_counts_is_ignored_not_fatal(
+    store: SessionStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Python's JSON reads `NaN` and `Infinity`, and `int()` of either raises: a
+    hand-made report could close its own conversation. `true` is not a count
+    either. The page never sends these; the socket must survive them anyway."""
+    client = TestClient(
+        create_app(llm=FakeLLM(), store=store, voice=False, ears=False, greeting="")
+    )
+    key = start(client)
+
+    with caplog.at_level(logging.INFO), client.websocket_connect(f"/ws/{key}") as socket:
+        socket.receive_json()
+        for raw in (
+            '{"type": "playback", "active": false, "gaps": NaN, "gap_ms": 5}',
+            '{"type": "playback", "active": false, "gaps": 1, "gap_ms": Infinity}',
+            '{"type": "playback", "active": false, "gaps": true, "gap_ms": 5}',
+            '{"type": "playback", "active": false, "gaps": 1, "gap_ms": 5, "first_gap_ms": NaN}',
+        ):
+            socket.send_text(raw)
+        socket.send_json({"type": "user_message", "text": "hello"})
+        drain(socket, audio=False)
+
+    stutters = [r.message for r in caplog.records if "playback stuttered" in r.message]
+    assert stutters == ["playback stuttered: 1 gaps, 5 ms of silence"]
+
+
 def test_the_reasoning_engine_is_connected_at_startup_not_on_the_first_question(
     store: SessionStore,
 ) -> None:

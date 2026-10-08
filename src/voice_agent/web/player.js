@@ -59,12 +59,12 @@ export function createPlayer({
     else pending.push([msg, transfer]);
   }
 
-  function finish(s, gaps, gapMs) {
+  function finish(s, gaps, gapMs, firstGapMs = null) {
     speech = null;
     s.gaps = gaps;
     s.gapMs = gapMs;
     onFinished(s);
-    onSpeaking(false, { gaps, gap_ms: gapMs });
+    onSpeaking(false, { gaps, gap_ms: gapMs, first_gap_ms: firstGapMs });
   }
 
   function receive(msg) {
@@ -90,7 +90,7 @@ export function createPlayer({
       // Sent only once the server has closed the stream *and* the last sample
       // has played: either alone would release the gate while audio is still
       // coming out.
-      finish(speech, msg.gaps, msg.gapMs);
+      finish(speech, msg.gaps, msg.gapMs, msg.firstGapMs ?? null);
     }
   }
 
