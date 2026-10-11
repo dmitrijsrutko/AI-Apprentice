@@ -45,3 +45,6 @@ export const screenFrame = (jpeg, changed, crop = null) =>
 export const phase = (to) => JSON.stringify({ type: "phase", to });
 
 export const mapStep = (n) => JSON.stringify({ type: "map_step", n });
+
+// The speaker switched on or off: the page silences itself, this is for the record.
+export const speaker = (on) => JSON.stringify({ type: "speaker", on });

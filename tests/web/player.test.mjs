@@ -9,13 +9,13 @@ import { createPlayback } from "../../src/voice_agent/web/playback-worklet.js";
 
 // A context whose rendering only happens when a test asks, and only while it
 // is running — as a real context renders nothing while suspended.
-function harness({ state = "running", muted = false } = {}) {
-  const h = { made: [], speaking: [], waiting: [], finished: [], errors: [], muted };
+function harness({ state = "running" } = {}) {
+  const h = { made: [], speaking: [], waiting: [], finished: [], errors: [], posted: [] };
   // Started on the first sample: the start threshold has tests of its own.
   const processor = createPlayback((msg) => h.node.port.onmessage({ data: msg }), 24000, 0);
   // Messages cross the port by structured clone with transfer, exactly as they
   // cross threads in a browser: a transferred buffer is detached on this side.
-  h.node = { port: { onmessage: null, postMessage: (msg, transfer = []) => processor.message(structuredClone(msg, { transfer })) } };
+  h.node = { port: { onmessage: null, postMessage: (msg, transfer = []) => { h.posted.push(msg.type); processor.message(structuredClone(msg, { transfer })); } } };
   h.ctx = {
     state,
     resume() { h.ctx.state = "running"; return Promise.resolve(); },
@@ -27,7 +27,6 @@ function harness({ state = "running", muted = false } = {}) {
   h.player = createPlayer({
     makeContext: (rate) => { h.made.push(rate); return h.ctx; },
     makeNode: async () => h.node,
-    isMuted: () => h.muted,
     onSpeaking: (active, report) => h.speaking.push(report === undefined ? [active] : [active, report]),
     onWaiting: (resume) => h.waiting.push(resume),
     onFinished: (s) => h.finished.push(s),
@@ -180,16 +179,29 @@ test("a new reply replaces one still playing, and the old one's reports are igno
   assert.deepEqual(h.finished.map((s) => s.bubble), ["second"]);
 });
 
-test("muted speech queues nothing and holds nothing", async () => {
-  const h = harness({ muted: true });
+test("muted speech still plays, silently: it holds the gate and finishes as usual", async () => {
+  const h = harness();
+  h.player.setMuted(true);  // before the context exists: it must not make one
+  assert.deepEqual(h.made, [], "muting made the context before its rate was known");
   await h.player.ready();
   h.player.start("bubble");
   h.player.chunk(CHUNK());
+  h.render();
+  assert.equal(lastSpeaking(h), true, "muted speech did not hold the gate");
+  assert.equal(h.posted[0], "mute", "a reply could start before the mute arrived");
+
   assert.equal(h.player.end(), "bubble");
   h.render(8);
+  assert.equal(lastSpeaking(h), false);
+  assert.deepEqual(h.finished.map((s) => s.bubble), ["bubble"]);
+});
 
-  assert.deepEqual(h.speaking.map(([active]) => active), [false]);
-  assert.equal(h.finished.length, 1);
+test("toggling mute on a live player reaches the worklet at once", async () => {
+  const h = harness();
+  await h.player.ready();
+  h.player.setMuted(true);
+  h.player.setMuted(false);
+  assert.deepEqual(h.posted, ["mute", "mute", "mute"]);
 });
 
 test("a context that cannot load the worklet reports it instead of failing silently", async () => {
@@ -197,7 +209,7 @@ test("a context that cannot load the worklet reports it instead of failing silen
   const failing = createPlayer({
     makeContext: () => h.ctx,
     makeNode: async () => { throw new Error("no AudioWorklet"); },
-    isMuted: () => false, onSpeaking() {}, onWaiting() {}, onFinished() {},
+    onSpeaking() {}, onWaiting() {}, onFinished() {},
     onError: (err) => h.errors.push(err),
   });
   failing.start(null);
@@ -290,7 +302,7 @@ test("the reply's position reaches the page with its bubble, in milliseconds", a
   const positions = [];
   const h = harness();
   const player = createPlayer({
-    makeContext: () => h.ctx, makeNode: async () => h.node, isMuted: () => false,
+    makeContext: () => h.ctx, makeNode: async () => h.node,
     onSpeaking() {}, onWaiting() {}, onFinished() {}, onError() {},
     onPosition: (bubble, ms) => positions.push([bubble, ms]),
   });

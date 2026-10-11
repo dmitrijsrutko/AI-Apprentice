@@ -8,7 +8,7 @@ export const send = document.getElementById("send");
 export const meta = document.getElementById("meta");
 export const status = document.getElementById("status");
 export const timer = document.getElementById("timer");
-export const mute = document.getElementById("mute");
+export const speaker = document.getElementById("speaker");
 export const stats = document.getElementById("stats");
 export const thoughts = document.getElementById("thoughts");
 export const eyesBox = document.getElementById("eyes");
@@ -87,8 +87,18 @@ export function paintText(el, text, shown) {
   body.replaceChildren(document.createTextNode(text.slice(0, shown)), rest);
 }
 
+// A switch keeps its icons: only its state and the label beside them change.
+function paintSwitch(button, on, label) {
+  button.setAttribute("aria-checked", String(on));
+  button.querySelector(".label").textContent = label;
+}
+
 export function paintListening(listening, speaking) {
-  listen.classList.toggle("on", listening);
-  listen.textContent = listening ? "⏹ stop" : "🎤 listen";
+  paintSwitch(listen, listening, listening ? "Mic on" : "Mic off");
+  listen.classList.toggle("live", listening);
   status.textContent = !listening ? "" : speaking ? "· listening — talk to interrupt" : "· listening";
+}
+
+export function paintSpeaker(on) {
+  paintSwitch(speaker, on, on ? "Speaker on" : "Speaker off");
 }

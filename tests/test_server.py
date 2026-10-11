@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -647,6 +648,31 @@ def test_a_playback_stutter_is_logged_with_where_in_the_reply_it_began(
     assert "playback stuttered: 1 gaps, 64 ms of silence, the first at 1233 ms" in caplog.text
     assert "playback stuttered: 1 gaps, 9 ms of silence\n" in caplog.text + "\n"
     assert "x\ny" not in caplog.text
+
+
+def test_the_speaker_switch_is_written_down_and_nothing_else_is(
+    store: SessionStore, tmp_path: Path
+) -> None:
+    """A record must say what the user heard and what they only read. Anything
+    but a bool is not from our page and writes nothing."""
+    client = TestClient(
+        create_app(
+            llm=FakeLLM(), store=store, voice=False, ears=False, greeting="", sessions_dir=tmp_path
+        )
+    )
+    key = start(client)
+
+    with client.websocket_connect(f"/ws/{key}") as socket:
+        socket.receive_json()
+        socket.send_json({"type": "speaker", "on": False})
+        socket.send_json({"type": "speaker", "on": "yes\n## 12:00 — agent"})
+        socket.send_json({"type": "speaker", "on": True})
+        socket.send_json({"type": "user_message", "text": "hello"})
+        drain(socket, audio=False)
+
+    text = "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.md"))
+    assert text.count("speaker: off") == 1 and text.count("speaker: on") == 1
+    assert "12:00 — agent" not in text
 
 
 def test_a_playback_report_with_numbers_that_are_not_counts_is_ignored_not_fatal(

@@ -8,11 +8,13 @@
   :root {
     --bg: #fbfbfa; --fg: #1c1c1a; --muted: #6b6b66; --line: #e3e2dd;
     --user: #1c1c1a; --user-fg: #fbfbfa; --agent: #ffffff;
+    --off: #c0392b; --live: #2e7d4f;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #16161a; --fg: #eceae6; --muted: #8a8a84; --line: #2b2b31;
       --user: #eceae6; --user-fg: #16161a; --agent: #1f1f25;
+      --off: #ef6f61; --live: #4caf7a;
     }
   }
   * { box-sizing: border-box; }
@@ -23,7 +25,7 @@
   }
   header {
     padding: 10px 16px; border-bottom: 1px solid var(--line);
-    display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
+    display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap;
     font-size: 12px; color: var(--muted);
   }
   header strong { color: var(--fg); font-size: 13px; }
@@ -54,7 +56,36 @@
     padding: 4px 10px; font-size: 12px; font-weight: 600; border-radius: 999px;
     background: transparent; color: var(--fg); border: 1px solid var(--line);
   }
-  .chip.on { background: #c0392b; color: #fff; border-color: #c0392b; }
+  /* The header's three groups: what you can watch, the call itself, leaving it.
+     A group wraps onto its own line as a whole, never split. */
+  .group { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+  /* Framed, so it still reads as its own section when the header wraps. */
+  .group.obs { border: 1px dashed var(--line); border-radius: 999px; padding: 3px 3px 3px 10px; }
+  .caption { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; cursor: help; }
+  .ctl { display: inline-flex; align-items: center; gap: 6px; }
+  .ico {
+    width: 14px; height: 14px; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  }
+  /* Mic and speaker say what is true now: the plain icon when on, crossed out
+     and red when off. Only the attribute changes; CSS picks the icon. */
+  .ctl[aria-checked="true"] .ico-off, .ctl[aria-checked="false"] .ico-on { display: none; }
+  .ctl[aria-checked="false"]:not(:disabled) {
+    color: var(--off); border-color: color-mix(in srgb, var(--off) 50%, transparent);
+    background: color-mix(in srgb, var(--off) 10%, transparent);
+  }
+  .ctl .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); display: none; }
+  .ctl.live .dot { display: inline-block; }
+  /* Solid buttons keep the darker red and green in both themes: white on the
+     dark theme's lighter tints is too faint. */
+  .end-session { margin-left: 10px; background: #c0392b; color: #fff; border-color: #c0392b; }
+  .end-session:disabled { background: transparent; color: var(--muted); border-color: var(--line); }
+  /* Observability: the checkbox stays (it is what bindSwitch reads and
+     remembers), hidden; its label is the chip. */
+  .toggle { position: relative; display: inline-block; cursor: pointer; }
+  .toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .toggle:has(input:checked) { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .toggle:has(input:focus-visible) { outline: 2px solid var(--fg); outline-offset: 1px; }
   .msg.volatile { opacity: .55; font-style: italic; }
   .note.think { opacity: .45; font-size: 11.5px; font-style: italic; }
   .tag { display: block; font-size: 11px; opacity: .5; margin-top: 4px; }
@@ -226,13 +257,18 @@
     <span id="status"></span>
     <span id="timer" class="timer" hidden></span>
     <span style="margin-left:auto;"></span>
-    <button type="button" id="listen" class="chip" disabled>🎤 listen</button>
-    <button type="button" id="share" class="chip" hidden title="Share a screen, window or tab with the apprentice">🖥 share</button>
-    <button type="button" id="end" class="chip" disabled title="End this conversation">⏹ End</button>
-    <label style="cursor:pointer;" title="Timings, tokens and the floor strip"><input type="checkbox" id="stats"> stats</label>
-    <label style="cursor:pointer;" title="What the agent considered saying"><input type="checkbox" id="thoughts"> thoughts</label>
-    <label style="cursor:pointer;" title="What the eyes saw on your shared screen"><input type="checkbox" id="eyes"> eyes</label>
-    <label style="cursor:pointer;"><input type="checkbox" id="mute"> mute</label>
+    <div class="group obs" role="group" aria-label="Observability">
+      <span class="caption" title="Show what happens under the hood — for debugging, not needed to talk">Observability</span>
+      <label class="chip toggle" title="Timings, tokens and the floor strip"><input type="checkbox" id="stats">stats</label>
+      <label class="chip toggle" title="What the agent considered saying"><input type="checkbox" id="thoughts">thoughts</label>
+      <label class="chip toggle" title="What the eyes saw on your shared screen"><input type="checkbox" id="eyes">eyes</label>
+    </div>
+    <div class="group call" role="group" aria-label="Call">
+      <button type="button" id="listen" class="chip ctl" role="switch" aria-checked="false" aria-label="Mic" title="Microphone: whether the apprentice hears you" disabled><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 2 20 20"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><path d="M12 19v3"/></svg><span class="label">Mic off</span><span class="dot"></span></button>
+      <button type="button" id="speaker" class="chip ctl" role="switch" aria-checked="true" aria-label="Speaker" title="Speaker: whether you hear the apprentice — off, it still talks, silently, and its words still light up"><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg><span class="label">Speaker on</span></button>
+      <button type="button" id="share" class="chip ctl" hidden title="Share a screen, window or tab with the apprentice"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 10 3-3 3 3"/><path d="M12 13V7"/><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M12 17v4"/><path d="M8 21h8"/></svg><span class="label">Share screen</span></button>
+      <button type="button" id="end" class="chip ctl end-session" disabled title="End this session — the conversation stops and cannot be resumed"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><path d="M22 2 2 22"/></svg><span class="label">End session</span></button>
+    </div>
   </header>
 
   <div id="floor" class="telemetry" aria-hidden="true"></div>

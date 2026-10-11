@@ -318,3 +318,50 @@ test("a stream that has run dry does not report moving on", () => {
 
   assert.deepEqual(posted.filter((m) => m.type === "position"), []);
 });
+
+test("mute silences at once, with a ramp not a step, and the reply plays on unheard", () => {
+  const { p, posted } = processor();
+  p.message({ type: "start", stream: 1 });
+  p.message({ type: "chunk", stream: 1, samples: new Float32Array(128 * 3).fill(1) });
+  const before = new Float32Array(128), during = new Float32Array(128);
+  p.process(before);
+  p.message({ type: "mute", muted: true });
+  p.process(during);
+
+  assert.ok(before.every((v) => v === 1), "unmuted audio was touched");
+  for (let i = 1; i < FADE_SAMPLES; i++) assert.ok(during[i] < during[i - 1], "a step, not a ramp");
+  assert.ok(during.slice(FADE_SAMPLES).every((v) => v === 0), "audio still heard after the ramp");
+
+  // Muted is only quiet: it is read, counted and reported as if heard.
+  p.message({ type: "stop", stream: 1 });
+  assert.deepEqual(posted.at(-1), { type: "stopped", stream: 1, played: 256 });
+});
+
+test("unmuting brings the voice back at once, and the reply never paused", () => {
+  const { p, posted } = processor();
+  p.message({ type: "mute", muted: true });
+  p.message({ type: "start", stream: 1 });
+  p.message({ type: "chunk", stream: 1, samples: new Float32Array(128 * 2).fill(1) });
+  p.message({ type: "end", stream: 1 });
+  const muted = new Float32Array(128), back = new Float32Array(128);
+  p.process(muted);
+  p.message({ type: "mute", muted: false });
+  p.process(back);
+
+  assert.ok(muted.every((v) => v === 0), "a reply started muted was heard");
+  assert.ok(back[0] > 0 && back[FADE_SAMPLES - 1] === 1, "sound did not come back within the ramp");
+  assert.ok(back.slice(FADE_SAMPLES).every((v) => v === 1));
+  assert.deepEqual(posted.map((m) => m.type), ["playing", "finished"]);
+});
+
+test("mute lasts across replies until it is changed", () => {
+  const { p } = processor();
+  p.message({ type: "mute", muted: true });
+  for (const id of [1, 2]) {
+    p.message({ type: "start", stream: id });
+    p.message({ type: "chunk", stream: id, samples: new Float32Array(128).fill(1) });
+    const out = new Float32Array(128);
+    p.process(out);
+    assert.ok(out.every((v) => v === 0), `reply ${id} was heard while muted`);
+  }
+});

@@ -12,7 +12,7 @@ import { createPlayer } from "./player.js";
 import { clientFacts } from "./client.js";
 import {
   clientError, clientInfo, endRound, interrupted, listenStart, listenStop, mapStep, phase,
-  micStats, playback, screenFrame, share, userMessage,
+  micStats, playback, screenFrame, share, speaker as speakerSwitch, userMessage,
 } from "./protocol.js";
 import { progress, renderRuling } from "./verdict.js";
 import { chosenEars, servedFacts, showStart, stackQuery } from "./start.js";
@@ -23,9 +23,9 @@ import {
 } from "./telemetry.js";
 import { declined, endLines, review } from "./review.js";
 import {
-  add, begin, endButton, eyesBox, floor, flow, flowNext, form, input, listen, meta, mute, note,
-  paintListening as paint, paintText, pinLast, setEnabled, shareButton, start, stats, status, stick,
-  thoughts, timer, toMap, wrap,
+  add, begin, endButton, eyesBox, floor, flow, flowNext, form, input, listen, meta, note,
+  paintListening as paint, paintSpeaker, paintText, pinLast, setEnabled, shareButton, speaker,
+  start, stats, status, stick, thoughts, timer, toMap, wrap,
 } from "./ui.js";
 
 const key = location.pathname.split("/").pop();
@@ -34,7 +34,7 @@ let bubble = null;         // the agent reply still being written, if any
 let reply = null;          // the latest agent bubble — whatever audio arrives is its voice
 let live = null;           // the user bubble being transcribed into, if any
 let listening = false;
-let speaking = false;      // the agent's voice is audible
+let speaking = false;      // the agent's voice is playing, heard unless the speaker is off
 let cut = null;            // the reply the user talked over; its late audio is ignored until the next reply
 let mic = null;            // { context, node, stream, rate } once built
 const floorEvents = [];   // the floor by the server's VAD, for the strip
@@ -61,11 +61,8 @@ function speechOf(el) {
 
 function paintSpeech(el) {
   const s = speechOf(el);
-  // Muted, nothing plays and nothing would light the words up: shown whole.
-  // Decided here rather than by dropping marks, so unmuting mid-reply still
-  // has the full timeline — marks skipped while muted misaligned every later one.
-  const following = !mute.checked;
-  paintText(el, s.text, s.shown ?? (following ? spokenChars(s.text, s.ends, s.playedMs) : s.text.length));
+  // Muted speech still plays, only silently, so its words light up as usual.
+  paintText(el, s.text, s.shown ?? spokenChars(s.text, s.ends, s.playedMs));
 }
 
 function schedule(el) {
@@ -154,6 +151,8 @@ function endConversation(why) {
   deadline = null;
   timer.hidden = true;
   endButton.disabled = true;
+  // Only when it did end: a dropped socket leaves the conversation resumable from its link.
+  if (why === "ended") endButton.querySelector(".label").textContent = "Session ended";
   listening = false;
   paintListening();
   listen.disabled = true;
@@ -208,10 +207,9 @@ function setSpeaking(active, report = {}) {
 
 const player = createPlayer({
   makeContext: (rate) => new AudioContext({ sampleRate: rate }),
-  isMuted: () => mute.checked,
   onSpeaking: setSpeaking,
   onWaiting: (resume) => {
-    status.textContent = "· click anywhere to hear the agent";
+    status.textContent = "· click anywhere to start the agent's voice";
     document.addEventListener("pointerdown", () => {
       status.textContent = "";
       resume();
@@ -222,7 +220,7 @@ const player = createPlayer({
   onError: (err) => add("audio unavailable: " + err.message, "error"),
   onFinished: (s) => {
     if (s.bubble) {
-      // Played to the end — or muted, with nothing to follow: all of it is out.
+      // Played to the end, or no audio arrived: all of it is out.
       const speech = speechOf(s.bubble);
       speech.shown = speech.text.length;
       schedule(s.bubble);
@@ -236,6 +234,15 @@ const player = createPlayer({
     schedule(bubble);
   },
 });
+
+// On with every page load: a greeting is never missed to a forgotten switch.
+let speakerOn = true;
+speaker.onclick = () => {
+  speakerOn = !speakerOn;
+  paintSpeaker(speakerOn);
+  player.setMuted(!speakerOn);
+  if (sending()) ws.send(speakerSwitch(speakerOn));
+};
 
 const meter = createMeter();
 const MIC_STATS_MS = 2000;
@@ -348,7 +355,7 @@ function addSeen(text, screen) {
 // The shared screen. Built once the server says this conversation has eyes.
 let eyes = null;
 function paintShare(sharing) {
-  shareButton.textContent = sharing ? "⏹ stop sharing" : "🖥 share";
+  shareButton.querySelector(".label").textContent = sharing ? "Stop sharing" : "Share screen";
   shareButton.classList.toggle("sharing", sharing);
 }
 shareButton.onclick = async () => {
@@ -482,6 +489,8 @@ const handlers = {
     judge = msg.judge;
     // Once per socket: which browser this is, then anything that failed before it opened.
     ws.send(clientInfo(clientFacts(navigator.userAgent)));
+    // Switched off on the start screen, before there was a socket to say so over.
+    if (!speakerOn) ws.send(speakerSwitch(false));
     while (unsent.length) ws.send(unsent.shift());
     const voice = msg.voice
       ? `${msg.voice.provider} ${msg.voice.model} ${msg.voice.voice.slice(0, 10)}`
@@ -536,7 +545,7 @@ const handlers = {
       if (judge && !announced) {
         announced = true;
         const length = msg.budget_seconds ? `${Math.round(msg.budget_seconds / 60)} minutes` : "no time limit";
-        add(`A judged round: ${length}. Press ⏹ End whenever you are done — then ${judge.title} rules on it.`, "note");
+        add(`A judged round: ${length}. Press End session whenever you are done — then ${judge.title} rules on it.`, "note");
       }
     }
   },
@@ -713,7 +722,7 @@ const handlers = {
     // A new session starts its floor from nothing; the old one's last state
     // would otherwise keep being painted, growing, with nobody listening.
     if (!msg.active) { floorEvents.length = 0; floor.replaceChildren(); }
-    if (msg.reason) add(msg.reason + " — press listen to resume", "note");
+    if (msg.reason) add(msg.reason + " — turn the mic on to resume", "note");
   },
 
   listen_error(msg) {
@@ -876,7 +885,7 @@ begin.onclick = async () => {
   const opening = rate ? buildMic(rate, sendFrame) : null;
   opening?.catch(() => {});  // reported below; not an unhandled rejection meanwhile
   start.remove();
-  add("Just talk — it is already listening. Or type. Press ⏹ End, or say “bye”, to finish.", "note");
+  add("Just talk — it is already listening. Or type. Press End session, or say “bye”, to finish.", "note");
   // Awaited *before* the socket opens, because the greeting follows it by about
   // 20 ms — comfortably fast enough to beat a resume that has been asked for
   // but has not finished. `player.chunk` would then see a context still reading

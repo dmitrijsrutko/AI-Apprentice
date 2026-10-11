@@ -939,6 +939,14 @@ async def handle_text(
             record.note(client_note(kind, payload))
         return
 
+    if kind == "speaker":
+        # The page silences itself; this only lets a record say what was heard
+        # and what was only read. Anything but a bool is not from our page.
+        on = payload.get("on")
+        if record is not None and isinstance(on, bool):
+            record.note(f"speaker: {'on' if on else 'off'}")
+        return
+
     if kind == "interrupted":
         # Client-supplied, so coerced: anything but a finite, non-negative
         # number of milliseconds means "nothing was playing".

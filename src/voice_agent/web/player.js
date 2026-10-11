@@ -26,7 +26,7 @@ async function playbackNode(context) {
 }
 
 export function createPlayer({
-  makeContext, makeNode = playbackNode, isMuted, onSpeaking, onWaiting, onFinished, onError,
+  makeContext, makeNode = playbackNode, onSpeaking, onWaiting, onFinished, onError,
   onPosition,
 }) {
   let output = null;       // the AudioContext speech plays through, made on first use
@@ -37,6 +37,7 @@ export function createPlayer({
   let speech = null;       // the reply currently streaming in / playing, if any
   let streams = 0;
   const stopping = new Map();  // stream id -> callback waiting to hear how much played
+  let muted = false;
 
   function context() {
     // At the voice's own rate, not the device's: the worklet then plays the
@@ -46,6 +47,8 @@ export function createPlayer({
       ready = makeNode(output).then((node) => {
         port = node.port;
         port.onmessage = (event) => receive(event.data);
+        // Mute first, so a reply that starts muted is silent from its first sample.
+        port.postMessage({ type: "mute", muted });
         for (const [msg, transfer] of pending) port.postMessage(msg, transfer);
         pending.length = 0;
       }, (err) => onError?.(err));
@@ -103,6 +106,13 @@ export function createPlayer({
     // Seconds between a sample leaving the worklet and leaving the speaker.
     outputLatency() { return output?.outputLatency ?? 0; },
 
+    // The volume only: a muted reply still plays, holds the gate and reports
+    // its position. Never makes the context — its rate is not known yet.
+    setMuted(on) {
+      muted = Boolean(on);
+      if (output) post({ type: "mute", muted });
+    },
+
     // Resolves once the output is wired. Tests and benchmarks wait on it.
     ready() { context(); return ready; },
 
@@ -114,7 +124,7 @@ export function createPlayer({
 
     chunk(bytes) {
       const s = speech;
-      if (!s || isMuted()) return;
+      if (!s) return;
       const samples = pcmToFloat32(bytes);
       // Counted before posting: the buffer is transferred, not copied, and a
       // transferred array reads as empty — which made every reply look like it
@@ -136,7 +146,7 @@ export function createPlayer({
     end() {
       if (!speech) return null;
       const s = speech;
-      if (s.sent === 0) finish(s, 0, 0);  // muted, so nothing was queued and nothing will play
+      if (s.sent === 0) finish(s, 0, 0);  // no audio arrived, so nothing will play
       else post({ type: "end", stream: s.id });
       return s.bubble;
     },
@@ -149,7 +159,7 @@ export function createPlayer({
       if (!s) { report(null); return; }
       speech = null;
       onSpeaking(false);
-      if (s.sent === 0) { report(null); return; }  // muted: read, not heard, and read in full
+      if (s.sent === 0) { report(null); return; }  // no audio: read, not heard, and read in full
       stopping.set(s.id, report);
       post({ type: "stop", stream: s.id });
     },

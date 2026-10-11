@@ -256,13 +256,41 @@ def test_every_function_a_module_calls_is_defined_or_imported(module: str) -> No
     assert not missing, f"{module} calls but never defines or imports: {sorted(missing)}"
 
 
+def test_the_header_is_three_marked_groups_with_switches_that_say_their_state() -> None:
+    """Microphone and speaker are the same kind of control and sit together, as
+    switches whose state is announced, not checkboxes miles apart; leaving says
+    what it leaves; the debugging switches are marked as such."""
+    page = PAGE.read_text(encoding="utf-8")
+    header = page.split("<header>", 1)[1].split("</header>", 1)[0]
+
+    for control in ('id="listen"', 'id="speaker"'):
+        tag, rest = header.split(control, 1)[1].split(">", 1)
+        assert 'role="switch"' in tag and "aria-checked=" in tag, control
+        # The fixed name begins the visible label ("Mic" of "Mic off"): a voice
+        # control user says what they see.
+        name = tag.split('aria-label="', 1)[1].split('"', 1)[0]
+        label = rest.split('class="label">', 1)[1].split("<", 1)[0]
+        assert label.startswith(name + " "), (name, label)
+    call = header.split('aria-label="Call"', 1)[1].split("</div>", 1)[0]
+    assert all(f'id="{c}"' in call for c in ("listen", "speaker", "share"))
+    assert ">End session<" in header
+    # A dropped socket is not an ended session: the link resumes it.
+    ended = 'if (why === "ended") endButton.querySelector(".label").textContent = "Session ended"'
+    assert ended in source("app.js")
+    obs = header.split('aria-label="Observability"', 1)[1].split("</div>", 1)[0]
+    assert ">Observability<" in obs
+    assert all(f'id="{c}"' in obs for c in ("stats", "thoughts", "eyes"))
+
+
 @pytest.mark.parametrize(
     "element",
     [
         "input",
         "send",
         "listen",
-        "mute",
+        "speaker",
+        "share",
+        "end",
         "log",
         "wrap",
         "form",

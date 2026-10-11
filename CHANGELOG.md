@@ -80,6 +80,10 @@ batch.
 - Real synthesis as above.
 - In production, after the first batch alone: dropouts in 10% of replies (3/29, one conversation), against 40%. The start threshold is not yet deployed.
 
+**Fixes**
+- Mute is now the worklet's output gain (2 ms ramp), not dropped chunks. It is silent at once, not after the queued seconds play out. The karaoke and the playback hold run as when audible, and talking over a muted reply interrupts it. The record writes `speaker: on/off`.
+- The header is now two groups: Observability (stats, thoughts, eyes as toggle chips) and the call (Mic on/off and Speaker on/off as switches that show their state, Share screen, End session). It replaces `🎤 listen`, `⏹ End` and the mute checkbox.
+
 ## Chapter 9 — The apprentice asks to see: screen sharing invited, not assumed
 
 The apprentice learns best by watching, but nothing told a newcomer it could

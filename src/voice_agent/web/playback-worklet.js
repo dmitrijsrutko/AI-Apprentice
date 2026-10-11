@@ -135,17 +135,41 @@ export const POSITION_QUANTA = 8;
 // a message back to the page; `rate` is the context's sample rate.
 //
 // Page -> here:  start {stream} · chunk {stream, samples} · end {stream} · drop {stream}
-//                stop {stream}
+//                stop {stream} · mute {muted} — for every stream, until changed
 // Here -> page:  playing {stream} once audio is audible · finished {stream, gaps, gapMs}
 //                stopped {stream, played} — samples played, or null if it had already finished
 //                position {stream, played} — samples played so far, while playing
 export function createPlayback(post, rate, startMs = START_MS) {
   const startSamples = Math.round((startMs * rate) / 1000);
   let stream = null;  // { id, queue, playing, played }
+  // Mute is the volume at the speaker and nothing else: a muted reply is read
+  // out, timed and reported exactly as an audible one, so its words still
+  // light up and the gate still holds. Ramped over FADE_SAMPLES, not stepped.
+  let gain = 1;
+  let target = 1;
+
+  function applyGain(out) {
+    if (gain === target) {
+      if (gain === 0) out.fill(0);
+      return;
+    }
+    const step = 1 / FADE_SAMPLES;
+    for (let i = 0; i < out.length; i++) {
+      gain = target > gain ? Math.min(target, gain + step) : Math.max(target, gain - step);
+      if (Math.abs(target - gain) < 1e-9) gain = target;  // summed steps land a hair off
+      out[i] *= gain;
+    }
+  }
 
   return {
     message(msg) {
+      if (msg.type === "mute") {
+        target = msg.muted ? 0 : 1;
+        if (!stream) gain = target;  // nothing playing: nothing to ramp
+        return;
+      }
       if (msg.type === "start") {
+        gain = target;  // a new reply starts from silence: no ramp into its first sample
         // A new stream replaces whatever was playing, immediately.
         stream = { id: msg.stream, queue: new PcmQueue(startSamples), playing: false, played: 0, quanta: 0 };
         return;
@@ -168,10 +192,12 @@ export function createPlayback(post, rate, startMs = START_MS) {
     process(out) {
       if (!stream) {
         out.fill(0);
+        gain = target;  // nothing to ramp in silence
         return;
       }
       const s = stream;
       const written = s.queue.pull(out);
+      applyGain(out);
       // Counted here, at the moment samples leave for the speaker — the only
       // place that knows how much of a reply was actually played.
       s.played += written;
