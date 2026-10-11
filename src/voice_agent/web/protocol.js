@@ -46,5 +46,7 @@ export const phase = (to) => JSON.stringify({ type: "phase", to });
 
 export const mapStep = (n) => JSON.stringify({ type: "map_step", n });
 
-// The speaker switched on or off: the page silences itself, this is for the record.
+// The speaker or the mic switched on or off: the page mutes itself, these are
+// for the record. A muted mic sends nothing; the session stays open.
 export const speaker = (on) => JSON.stringify({ type: "speaker", on });
+export const micSwitch = (on) => JSON.stringify({ type: "mic", on });

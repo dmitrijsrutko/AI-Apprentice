@@ -46,7 +46,7 @@ from voice_agent.conversation import Conversation, Message
 from voice_agent.errors import ConfigError, SessionNotFoundError, VoiceAgentError
 from voice_agent.events import Announce, Playback, Typed
 from voice_agent.eyes import Eyes
-from voice_agent.greeting import greet
+from voice_agent.greeting import begin_greeting
 from voice_agent.initiative import LADDER, Rung
 from voice_agent.limits import Live, MintLimit, budget_reason, client_address
 from voice_agent.llm import LLM, create_llm
@@ -696,9 +696,21 @@ async def converse(agent: Agent, websocket: WebSocket, conversation: Conversatio
             "ended": conversation.ended,
         }
     )
-    session.voiced(await greet(channel, conversation, speaker, opening))
-    # After the greeting, so the clock measures the silence after the agent's voice.
-    session.start()
+    voice, greeting = await begin_greeting(channel, conversation, speaker, opening)
+    session.voiced(voice, greeting)
+    if greeting is None:
+        session.start()
+    else:
+
+        def greeted(made: "asyncio.Task[None]") -> None:
+            # After the greeting, so the clock measures the silence after the
+            # agent's voice — made, or cut short by a turn. Cut by the socket
+            # closing, `start` does nothing: the session is closed first.
+            if not made.cancelled() and (exc := made.exception()) is not None:
+                logger.error("conversation %s: greeting failed", conversation.id, exc_info=exc)
+            session.start()
+
+        greeting.add_done_callback(greeted)
     budget = (
         asyncio.create_task(expire(left, budget_seconds, session, websocket))
         if left is not None and budget_seconds is not None and not conversation.ended
@@ -939,12 +951,13 @@ async def handle_text(
             record.note(client_note(kind, payload))
         return
 
-    if kind == "speaker":
-        # The page silences itself; this only lets a record say what was heard
-        # and what was only read. Anything but a bool is not from our page.
+    if kind in ("speaker", "mic"):
+        # The page mutes itself, either way; this only lets a record say what
+        # was heard, what was only read, and when nothing was sent. Anything
+        # but a bool is not from our page.
         on = payload.get("on")
         if record is not None and isinstance(on, bool):
-            record.note(f"speaker: {'on' if on else 'off'}")
+            record.note(f"{kind}: {'on' if on else 'off'}")
         return
 
     if kind == "interrupted":

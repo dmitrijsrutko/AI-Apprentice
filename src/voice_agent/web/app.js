@@ -11,8 +11,8 @@ import { addMarks, spokenChars } from "./karaoke.js";
 import { createPlayer } from "./player.js";
 import { clientFacts } from "./client.js";
 import {
-  clientError, clientInfo, endRound, interrupted, listenStart, listenStop, mapStep, phase,
-  micStats, playback, screenFrame, share, speaker as speakerSwitch, userMessage,
+  clientError, clientInfo, endRound, interrupted, listenStart, mapStep, micStats, micSwitch, phase,
+  playback, screenFrame, share, speaker as speakerSwitch, userMessage,
 } from "./protocol.js";
 import { progress, renderRuling } from "./verdict.js";
 import { chosenEars, servedFacts, showStart, stackQuery } from "./start.js";
@@ -23,9 +23,9 @@ import {
 } from "./telemetry.js";
 import { declined, endLines, review } from "./review.js";
 import {
-  add, begin, endButton, eyesBox, floor, flow, flowNext, form, input, listen, meta, note,
-  paintListening as paint, paintSpeaker, paintText, pinLast, setEnabled, shareButton, speaker,
-  start, stats, status, stick, thoughts, timer, toMap, wrap,
+  add, begin, endButton, eyesBox, floor, flow, flowNext, form, input, listen, meta, micStarting,
+  note, paintListening as paint, paintSpeaker, paintText, pinLast, setEnabled, shareButton,
+  speaker, start, stats, status, stick, thoughts, timer, toMap, wrap,
 } from "./ui.js";
 
 const key = location.pathname.split("/").pop();
@@ -33,7 +33,8 @@ const key = location.pathname.split("/").pop();
 let bubble = null;         // the agent reply still being written, if any
 let reply = null;          // the latest agent bubble — whatever audio arrives is its voice
 let live = null;           // the user bubble being transcribed into, if any
-let listening = false;
+let listening = false;     // the server's listening session is open
+let micOn = true;          // the user's switch: off mutes here, and the session stays open
 let speaking = false;      // the agent's voice is playing, heard unless the speaker is off
 let cut = null;            // the reply the user talked over; its late audio is ignored until the next reply
 let mic = null;            // { context, node, stream, rate } once built
@@ -120,7 +121,7 @@ const awake = createAwake({
   },
 });
 
-function paintListening() { paint(listening, speaking); }
+function paintListening() { paint(listening && micOn, speaking); }
 
 // The time limit, counted from this connection like the server's own. Shown
 // only in the last minute, with one note when it starts.
@@ -152,8 +153,9 @@ function endConversation(why) {
   timer.hidden = true;
   endButton.disabled = true;
   // Only when it did end: a dropped socket leaves the conversation resumable from its link.
-  if (why === "ended") endButton.querySelector(".label").textContent = "Session ended";
+  if (why === "ended") endButton.classList.add("ended");
   listening = false;
+  micStarting(false);
   paintListening();
   listen.disabled = true;
   if (mic) {
@@ -247,18 +249,26 @@ speaker.onclick = () => {
 const meter = createMeter();
 const MIC_STATS_MS = 2000;
 
+let silence = null;         // what a muted microphone sends: zeros, as long as a frame
 function sendFrame(pcm) {
   // Full duplex: sent while the agent talks too, so the user can talk over it.
   // The browser's echo cancellation (requested in mic.js) is what keeps the
   // agent's own voice out of these frames.
-  if (listening && sending()) {
+  if (!listening || !sending()) return;
+  if (micOn) {
     meter.add(pcm, performance.now());
     ws.send(pcm.buffer);
+    return;
   }
+  // Muted: silence in its place, not nothing. The recognizer ends a turn by
+  // hearing silence, so a sentence cut by the mute still ends at once; sent
+  // nothing, it waited on the server's sparse keep-alive for about a minute.
+  if (silence?.length !== pcm.length) silence = new pcm.constructor(pcm.length);
+  ws.send(silence.buffer);
 }
 
 setInterval(() => {
-  if (!listening || !sending()) return;
+  if (!listening || !micOn || !sending()) return;
   const sharing = Boolean(eyes?.isSharing());
   ws.send(micStats({
     ...meter.take(), ...trackFacts(mic), sharing, capture: sharing ? eyes.size() : "",
@@ -355,7 +365,6 @@ function addSeen(text, screen) {
 // The shared screen. Built once the server says this conversation has eyes.
 let eyes = null;
 function paintShare(sharing) {
-  shareButton.querySelector(".label").textContent = sharing ? "Stop sharing" : "Share screen";
   shareButton.classList.toggle("sharing", sharing);
 }
 shareButton.onclick = async () => {
@@ -526,6 +535,8 @@ const handlers = {
     flow.hidden = !msg.mapped;
     if (msg.mapped) setPhase(msg.phase ?? "capture");
     listen.disabled = !msg.ears;
+    // Shown as starting since the Start click; with nothing to start, it is off.
+    if (!msg.ears || micRefused) micStarting(false);
     // Pressing start was saying "ready"; not again after a refused microphone,
     // which would put a second prompt over the greeting.
     if (msg.ears && !micRefused) beginListening();
@@ -718,6 +729,7 @@ const handlers = {
 
   listening(msg) {
     listening = msg.active;
+    micStarting(false);
     paintListening();
     // A new session starts its floor from nothing; the old one's last state
     // would otherwise keep being painted, growing, with nobody listening.
@@ -727,6 +739,7 @@ const handlers = {
 
   listen_error(msg) {
     listening = false;
+    micStarting(false);
     paintListening();
     add(msg.message, "error");
   },
@@ -850,6 +863,7 @@ endButton.onclick = () => {
 async function beginListening() {
   if (reopening) return;  // the microphone is being replaced this moment
   listen.disabled = true;
+  micStarting(true);
   try {
     player.resume();  // a gesture: the one moment autoplay is allowed
     if (!mic) mic = await buildMic(sampleRate, sendFrame);
@@ -860,13 +874,26 @@ async function beginListening() {
     // In the log, not the status line: `paintListening` repaints that on every
     // change of listening or speaking, so the one message explaining why
     // nobody can be heard would be wiped by the next one.
+    micStarting(false);
     micFailed(err);
   } finally {
     listen.disabled = false;
   }
 }
 
-listen.onclick = () => (listening ? ws.send(listenStop()) : beginListening());
+// Off is a mute, not a hang-up: each new recognition session counts against
+// the provider's limit (AssemblyAI's free tier: 5 a minute), and toggling
+// hit it. A session that has ended (idle, failed) is opened anew.
+listen.onclick = () => {
+  if (!listening) {
+    micOn = true;
+    beginListening();
+    return;
+  }
+  micOn = !micOn;
+  paintListening();
+  if (sending()) ws.send(micSwitch(micOn));
+};
 
 begin.onclick = async () => {
   // First, and with nothing awaited above it: this is the user gesture, and it
@@ -884,6 +911,8 @@ begin.onclick = async () => {
   const rate = chosenEars(servedFacts())?.sample_rate;
   const opening = rate ? buildMic(rate, sendFrame) : null;
   opening?.catch(() => {});  // reported below; not an unhandled rejection meanwhile
+  // On from the click: what follows is the microphone arriving, not refused.
+  if (opening) micStarting(true);
   start.remove();
   add("Just talk — it is already listening. Or type. Press End session, or say “bye”, to finish.", "note");
   // Awaited *before* the socket opens, because the greeting follows it by about
@@ -902,6 +931,7 @@ begin.onclick = async () => {
       showMic();
     } catch (err) {
       micRefused = true;
+      micStarting(false);
       micFailed(err);
     }
     // Opening the microphone can make the system pause playback (iOS switches

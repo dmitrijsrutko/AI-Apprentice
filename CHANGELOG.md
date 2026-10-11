@@ -83,6 +83,9 @@ batch.
 **Fixes**
 - Mute is now the worklet's output gain (2 ms ramp), not dropped chunks. It is silent at once, not after the queued seconds play out. The karaoke and the playback hold run as when audible, and talking over a muted reply interrupts it. The record writes `speaker: on/off`.
 - The header is now two groups: Observability (stats, thoughts, eyes as toggle chips) and the call (Mic on/off and Speaker on/off as switches that show their state, Share screen, End session). It replaces `🎤 listen`, `⏹ End` and the mute checkbox.
+- The socket is read while the greeting is synthesized, not after it. On Fly the page's first message (its `listen_start`) reached the server 2.55 s after `ready`, median of 45 conversations (p90 3.64 s): the mic showed off, and nothing said meanwhile was sent. A turn that starts meanwhile cuts the greeting's synthesis, so the two voices never mix in one stream. The mic now shows as starting from the Start click, never red unless refused.
+- The header no longer jumps between one and two lines as the mic, speaker or status change. Each control holds both its texts at one width, and the status line shortens the meta instead of pushing the controls.
+- Mic off is now a mute, not a hang-up. On Fly, toggling it opened 5 AssemblyAI sessions in 21 s, and the 6th was refused ("Too many concurrent sessions"). That text is AssemblyAI's free-tier limit of 5 *new* sessions a minute. Muted, the page sends silence in place of the microphone, so a sentence cut by the mute still ends at once, and the one session stays open. The record writes `mic: off/on`, and the error now names the limit.
 
 ## Chapter 9 — The apprentice asks to see: screen sharing invited, not assumed
 

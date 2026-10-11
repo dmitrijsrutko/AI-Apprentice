@@ -62,20 +62,45 @@
   /* Framed, so it still reads as its own section when the header wraps. */
   .group.obs { border: 1px dashed var(--line); border-radius: 999px; padding: 3px 3px 3px 10px; }
   .caption { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; cursor: help; }
-  .ctl { display: inline-flex; align-items: center; gap: 6px; }
+  /* Title, meta and status take what the groups leave, down to 16rem, and cut
+     the meta short rather than grow: the header wraps by its width alone,
+     never because a status line or a label changed. */
+  .info {
+    flex: 1 1 16rem; min-width: 0; overflow: hidden;
+    display: flex; align-items: baseline; gap: 12px; white-space: nowrap;
+  }
+  .info > * { flex: none; }
+  #meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ctl { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex: none; }
+  /* On a phone the call's buttons wrap between themselves, never inside one:
+     each is as wide in every state, so where they wrap depends on the width alone. */
+  .group.call { flex-wrap: wrap; row-gap: 6px; }
+  /* Both texts of a control share one cell, so it is as wide in either state;
+     the other is hidden, which also keeps it out of the accessible name. */
+  .ctl .label { display: inline-grid; }
+  .ctl .label > * { grid-area: 1 / 1; }
+  .ctl:not(.sharing):not(.ended) .label .act, .ctl:is(.sharing, .ended) .label .idle { visibility: hidden; }
   .ico {
     width: 14px; height: 14px; flex: none;
     fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
   }
   /* Mic and speaker say what is true now: the plain icon when on, crossed out
      and red when off. Only the attribute changes; CSS picks the icon. */
-  .ctl[aria-checked="true"] .ico-off, .ctl[aria-checked="false"] .ico-on { display: none; }
-  .ctl[aria-checked="false"]:not(:disabled) {
+  /* Starting (aria-busy) looks like on, not off: the mic is coming, not refused. */
+  .ctl:is([aria-checked="true"], [aria-busy="true"]) .ico-off,
+  .ctl[aria-checked="false"]:not([aria-busy="true"]) .ico-on { display: none; }
+  .ctl:is([aria-checked="true"], [aria-busy="true"]) .label .off,
+  .ctl[aria-checked="false"]:not([aria-busy="true"]) .label .on { visibility: hidden; }
+  .ctl[aria-busy="true"] { cursor: progress; }
+  .ctl[aria-busy="true"]:disabled { opacity: 1; }
+  .ctl[aria-checked="false"]:not(:disabled):not([aria-busy="true"]) {
     color: var(--off); border-color: color-mix(in srgb, var(--off) 50%, transparent);
     background: color-mix(in srgb, var(--off) 10%, transparent);
   }
-  .ctl .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); display: none; }
-  .ctl.live .dot { display: inline-block; }
+  /* The dot always takes its space; only whether it shows changes. */
+  .ctl .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); visibility: hidden; }
+  .ctl.live .dot, .ctl[aria-busy="true"] .dot { visibility: visible; }
+  .ctl[aria-busy="true"]:not(.live) .dot { animation: v-pulse 1s ease-in-out infinite; }
   /* Solid buttons keep the darker red and green in both themes: white on the
      dark theme's lighter tints is too faint. */
   .end-session { margin-left: 10px; background: #c0392b; color: #fff; border-color: #c0392b; }
@@ -230,7 +255,7 @@
   }
   .v-scale { display: inline-block; animation: v-pulse 1.6s ease-in-out infinite; }
   @keyframes v-pulse { 50% { opacity: .35; } }
-  @media (prefers-reduced-motion: reduce) { .v-scale { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .v-scale, .ctl .dot { animation: none !important; } }
   #again:disabled { cursor: progress; }
 
   @media (max-width: 480px) {
@@ -252,11 +277,12 @@
 </head>
 <body>
   <header>
-    <strong>AI-Apprentice</strong>
-    <span id="meta">connecting…</span>
-    <span id="status"></span>
-    <span id="timer" class="timer" hidden></span>
-    <span style="margin-left:auto;"></span>
+    <div class="info">
+      <strong>AI-Apprentice</strong>
+      <span id="meta">connecting…</span>
+      <span id="status"></span>
+      <span id="timer" class="timer" hidden></span>
+    </div>
     <div class="group obs" role="group" aria-label="Observability">
       <span class="caption" title="Show what happens under the hood — for debugging, not needed to talk">Observability</span>
       <label class="chip toggle" title="Timings, tokens and the floor strip"><input type="checkbox" id="stats">stats</label>
@@ -264,10 +290,10 @@
       <label class="chip toggle" title="What the eyes saw on your shared screen"><input type="checkbox" id="eyes">eyes</label>
     </div>
     <div class="group call" role="group" aria-label="Call">
-      <button type="button" id="listen" class="chip ctl" role="switch" aria-checked="false" aria-label="Mic" title="Microphone: whether the apprentice hears you" disabled><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 2 20 20"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><path d="M12 19v3"/></svg><span class="label">Mic off</span><span class="dot"></span></button>
-      <button type="button" id="speaker" class="chip ctl" role="switch" aria-checked="true" aria-label="Speaker" title="Speaker: whether you hear the apprentice — off, it still talks, silently, and its words still light up"><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg><span class="label">Speaker on</span></button>
-      <button type="button" id="share" class="chip ctl" hidden title="Share a screen, window or tab with the apprentice"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 10 3-3 3 3"/><path d="M12 13V7"/><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M12 17v4"/><path d="M8 21h8"/></svg><span class="label">Share screen</span></button>
-      <button type="button" id="end" class="chip ctl end-session" disabled title="End this session — the conversation stops and cannot be resumed"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><path d="M22 2 2 22"/></svg><span class="label">End session</span></button>
+      <button type="button" id="listen" class="chip ctl" role="switch" aria-checked="false" aria-label="Mic" title="Microphone: whether the apprentice hears you" disabled><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 2 20 20"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><path d="M12 19v3"/></svg><span class="label"><span class="on">Mic on</span><span class="off">Mic off</span></span><span class="dot"></span></button>
+      <button type="button" id="speaker" class="chip ctl" role="switch" aria-checked="true" aria-label="Speaker" title="Speaker: whether you hear the apprentice — off, it still talks, silently, and its words still light up"><svg class="ico ico-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><svg class="ico ico-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg><span class="label"><span class="on">Speaker on</span><span class="off">Speaker off</span></span></button>
+      <button type="button" id="share" class="chip ctl" hidden title="Share a screen, window or tab with the apprentice"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 10 3-3 3 3"/><path d="M12 13V7"/><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M12 17v4"/><path d="M8 21h8"/></svg><span class="label"><span class="idle">Share screen</span><span class="act">Stop sharing</span></span></button>
+      <button type="button" id="end" class="chip ctl end-session" disabled title="End this session — the conversation stops and cannot be resumed"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><path d="M22 2 2 22"/></svg><span class="label"><span class="idle">End session</span><span class="act">Session ended</span></span></button>
     </div>
   </header>
 

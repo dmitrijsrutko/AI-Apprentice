@@ -266,17 +266,36 @@ def test_the_header_is_three_marked_groups_with_switches_that_say_their_state() 
     for control in ('id="listen"', 'id="speaker"'):
         tag, rest = header.split(control, 1)[1].split(">", 1)
         assert 'role="switch"' in tag and "aria-checked=" in tag, control
-        # The fixed name begins the visible label ("Mic" of "Mic off"): a voice
+        # Both texts are in the markup, one hidden, so the button keeps its
+        # width; the fixed name begins each ("Mic" of "Mic off"): a voice
         # control user says what they see.
         name = tag.split('aria-label="', 1)[1].split('"', 1)[0]
-        label = rest.split('class="label">', 1)[1].split("<", 1)[0]
-        assert label.startswith(name + " "), (name, label)
+        for state in ("on", "off"):
+            text = rest.split(f'<span class="{state}">', 1)[1].split("<", 1)[0]
+            assert text.startswith(name + " "), (name, text)
     call = header.split('aria-label="Call"', 1)[1].split("</div>", 1)[0]
     assert all(f'id="{c}"' in call for c in ("listen", "speaker", "share"))
-    assert ">End session<" in header
+    assert ">End session<" in header and ">Session ended<" in header
+    assert ">Share screen<" in header and ">Stop sharing<" in header
     # A dropped socket is not an ended session: the link resumes it.
-    ended = 'if (why === "ended") endButton.querySelector(".label").textContent = "Session ended"'
-    assert ended in source("app.js")
+    assert 'if (why === "ended") endButton.classList.add("ended");' in source("app.js")
+    # Mic off is a mute, not a hang-up: each new recognition session counts
+    # against AssemblyAI's free tier (5 a minute), and toggling used them up.
+    click = source("app.js").split("listen.onclick = () => {", 1)[1].split("\n};", 1)[0]
+    assert "listenStop" not in click and "ws.send(micSwitch(micOn))" in click
+    # Muted, silence goes in the microphone's place: the recognizer ends a turn
+    # by hearing it, and only real frames reach the meter.
+    frame = source("app.js").split("function sendFrame(pcm) {", 1)[1].split("\n}", 1)[0]
+    assert "if (micOn) {" in frame and "ws.send(silence.buffer)" in frame
+    assert frame.index("meter.add") < frame.index("ws.send(silence.buffer)")
+    # Starting is shown from the Start click; a server with no ears must end it.
+    assert "if (!msg.ears || micRefused) micStarting(false);" in source("app.js")
+    # What changes as the conversation runs sits where it cannot move the
+    # controls: the status line beside a meta that shortens instead.
+    info = header.split('<div class="info">', 1)[1].split("</div>", 1)[0]
+    assert 'id="meta"' in info and 'id="status"' in info and 'id="timer"' in info
+    # No label is rewritten by script: that is what changed a control's width.
+    assert '.label").textContent' not in source("app.js") + source("ui.js")
     obs = header.split('aria-label="Observability"', 1)[1].split("</div>", 1)[0]
     assert ">Observability<" in obs
     assert all(f'id="{c}"' in obs for c in ("stats", "thoughts", "eyes"))

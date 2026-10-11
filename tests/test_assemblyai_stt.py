@@ -168,6 +168,24 @@ async def test_an_error_payload_raises(endpoint: Endpoint) -> None:
             pass
 
 
+async def test_the_free_tier_session_limit_says_what_it_is(endpoint: Endpoint) -> None:
+    """Measured on Fly: the sixth session in a minute was refused with this
+    text. It says "concurrent", but the free tier's limit is 5 *new* sessions a
+    minute — and nothing in the raw text says what to do."""
+
+    async def limited(connection: ServerConnection) -> None:
+        error = "Unauthorized Connection: Too many concurrent sessions"
+        await connection.send(json.dumps({"type": "Error", "error": error}))
+        async for _ in connection:
+            pass
+
+    stt = await endpoint(limited)
+
+    with pytest.raises(ProviderError, match="5 new streaming sessions a minute"):
+        async for _ in stt.stream(audio_of(1)):
+            pass
+
+
 async def test_an_unreachable_service_is_a_provider_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

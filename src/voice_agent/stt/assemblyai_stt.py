@@ -124,7 +124,10 @@ TURN = "Turn"
 TERMINATION = "Termination"
 
 CLOSE_HINTS = {
-    1008: "check ASSEMBLYAI_API_KEY — the key was missing or rejected.",
+    1008: (
+        "check ASSEMBLYAI_API_KEY — missing or rejected — or the free tier's"
+        " 5 new sessions a minute were used up."
+    ),
     3005: "the service cancelled the session.",
     3006: "the service rejected a message as malformed.",
     3007: "an audio chunk was outside the 50-1000 ms window, or arrived faster than real time.",
@@ -133,6 +136,15 @@ CLOSE_HINTS = {
 }
 """The close code *is* the error on this endpoint — it rarely sends an error
 payload — and the codes alone say nothing about what to do."""
+
+ERROR_HINTS = {
+    "Too many concurrent sessions": (
+        "AssemblyAI's free tier opens at most 5 new streaming sessions a minute"
+        " (paid: 100+) — wait a minute, or upgrade the account."
+    ),
+}
+"""For the error payloads whose text misleads. This one says "concurrent", but
+it is the limit on *new* sessions per minute (docs, rate limits, 2026-10-11)."""
 
 
 def explain(exc: Exception) -> str:
@@ -276,8 +288,11 @@ class AssemblyAISTT:
             payload = json.loads(raw)
             if not isinstance(payload, dict):
                 continue
-            if payload.get("error"):
-                raise ProviderError(f"assemblyai transcription failed: {payload['error']}")
+            if error := payload.get("error"):
+                hint = next((h for text, h in ERROR_HINTS.items() if text in str(error)), None)
+                raise ProviderError(
+                    f"assemblyai transcription failed: {error}" + (f" — {hint}" if hint else "")
+                )
 
             kind = payload.get("type")
             if kind == BEGIN:

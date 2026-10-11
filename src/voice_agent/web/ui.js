@@ -87,18 +87,22 @@ export function paintText(el, text, shown) {
   body.replaceChildren(document.createTextNode(text.slice(0, shown)), rest);
 }
 
-// A switch keeps its icons: only its state and the label beside them change.
-function paintSwitch(button, on, label) {
-  button.setAttribute("aria-checked", String(on));
-  button.querySelector(".label").textContent = label;
-}
-
-export function paintListening(listening, speaking) {
-  paintSwitch(listen, listening, listening ? "Mic on" : "Mic off");
-  listen.classList.toggle("live", listening);
-  status.textContent = !listening ? "" : speaking ? "· listening — talk to interrupt" : "· listening";
+// A switch's icons and both its texts are in the markup; CSS shows the ones
+// its state calls for, so nothing here changes its width. `on`: listening, and
+// not muted — what the user is actually being heard through.
+export function paintListening(on, speaking) {
+  listen.setAttribute("aria-checked", String(on));
+  listen.classList.toggle("live", on);
+  status.textContent = !on ? "" : speaking ? "· listening — talk to interrupt" : "· listening";
 }
 
 export function paintSpeaker(on) {
-  paintSwitch(speaker, on, on ? "Speaker on" : "Speaker off");
+  speaker.setAttribute("aria-checked", String(on));
+}
+
+// The microphone is on its way — asked for, or waiting for the server to say
+// it listens: shown as on, not as off, which is what the user asked for.
+export function micStarting(on) {
+  if (on) listen.setAttribute("aria-busy", "true");
+  else listen.removeAttribute("aria-busy");
 }

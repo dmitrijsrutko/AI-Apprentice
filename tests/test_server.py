@@ -667,11 +667,15 @@ def test_the_speaker_switch_is_written_down_and_nothing_else_is(
         socket.send_json({"type": "speaker", "on": False})
         socket.send_json({"type": "speaker", "on": "yes\n## 12:00 — agent"})
         socket.send_json({"type": "speaker", "on": True})
+        socket.send_json({"type": "mic", "on": False})
+        socket.send_json({"type": "mic", "on": 1})
+        socket.send_json({"type": "mic", "on": True})
         socket.send_json({"type": "user_message", "text": "hello"})
         drain(socket, audio=False)
 
     text = "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.md"))
     assert text.count("speaker: off") == 1 and text.count("speaker: on") == 1
+    assert text.count("mic: off") == 1 and text.count("mic: on") == 1
     assert "12:00 — agent" not in text
 
 

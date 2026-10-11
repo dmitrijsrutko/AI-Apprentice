@@ -136,6 +136,10 @@ class Session:
         self._turns: dict[asyncio.Task[None], Turn] = {}
         self._voice: Spoken | None = None
         """The agent's latest speech, which the user may still be hearing."""
+        self._greeting: asyncio.Task[None] | None = None
+        """The greeting's synthesis while it is still being made. The socket is
+        read meanwhile, so a turn that starts must cut it, or its audio plays
+        inside the reply's: audio frames carry no stream id."""
         self._quick = checker or thinker or engine
         """What weighs whether the screen overtook the voice: its own engine
         (`overtaken.ENGINES`), else the inner voice's, else the reply engine."""
@@ -308,7 +312,10 @@ class Session:
                 self._weigh(following)
 
     def start(self) -> None:
-        """Begin considering whether to speak; called once the greeting is out."""
+        """Begin considering whether to speak; called once the greeting is out,
+        or cut short by a turn. Not after the socket is gone."""
+        if self._closed:
+            return
         if self.mic is not None:
             self._initiative.start()
 
@@ -452,10 +459,18 @@ class Session:
         audible = self._voice is not None and self._voice.audible
         return audible or (self._settling is not None and not self._settling.done())
 
-    def voiced(self, voice: Spoken | None) -> None:
-        """Speech that did not come from a turn — the greeting."""
+    def voiced(self, voice: Spoken | None, making: "asyncio.Task[None] | None" = None) -> None:
+        """Speech that did not come from a turn — the greeting — and the task
+        still making it, if it is not made yet."""
         if voice is not None:
             self._voice = voice
+        self._greeting = making
+
+    def _cut_greeting(self) -> None:
+        """Stop making the greeting: what was sent of it has been, the rest never is."""
+        greeting, self._greeting = self._greeting, None
+        if greeting is not None and not greeting.done():
+            greeting.cancel()
 
     def playback(self, active: bool) -> None:
         """The browser started or stopped playing the agent's voice."""
@@ -571,6 +586,7 @@ class Session:
         recorded as is settled in the background, since it needs the browser's
         answer and the caller must not wait for it.
         """
+        self._cut_greeting()
         voice = self._voice
         audible = voice is not None and voice.audible
         live = {
@@ -757,6 +773,7 @@ class Session:
         self._begin(turn, None, {"initiative": rung})
 
     def _begin(self, turn: Turn, claimed: Speculation | None, report: dict[str, object]) -> None:
+        self._cut_greeting()
         self._voice = turn.voice
         self._voice_asked = turn.text or ""
         task = asyncio.create_task(self._take_turn(turn, claimed, report))
@@ -884,6 +901,7 @@ class Session:
     async def close(self) -> None:
         """The socket is gone."""
         self._closed = True
+        self._cut_greeting()
         conductor, self._conductor = self._conductor, None
         if conductor is not None and conductor is not asyncio.current_task():
             # First: nothing decides anything any more.

@@ -1,5 +1,7 @@
 """End-to-end listening over a real WebSocket; only the recognizer is faked."""
 
+import asyncio
+import threading
 import time
 from typing import Any
 
@@ -578,3 +580,105 @@ def test_stopping_the_mic_mid_reply_neither_waits_for_nor_cuts_the_reply(
     assert kinds.index("listening") < kinds.index("reply_end")
     assert frames[kinds.index("reply_end")]["text"].split() == words.split()
     assert [m.role for m in store.get(key).messages] == ["user", "assistant"]
+
+
+class StalledTTS(FakeTTS):
+    """A voice whose synthesis stops after its first chunk until released: the
+    greeting, still being made, for as long as a test wants."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+
+    async def stream(self, text: Any) -> Any:
+        stalls = not self.spoken  # the first synthesis only: the greeting
+        async for chunk in super().stream(text):
+            yield chunk
+            if stalls:
+                await asyncio.to_thread(self.gate.wait, 5)
+
+
+def test_the_page_is_heard_while_the_greeting_is_still_being_made(store: SessionStore) -> None:
+    """Measured on Fly: the page's first message reached the server 2.55 s
+    (median) after `ready`, because the socket was not read until the
+    greeting's synthesis finished — the mic stayed off, and what the user said
+    meanwhile was never sent."""
+    tts = StalledTTS()
+    client = TestClient(
+        create_app(llm=FakeLLM(), tts=tts, stt=FakeSTT(), store=store, greeting="Hello there.")
+    )
+    key = start(client)
+
+    with client.websocket_connect(f"/ws/{key}") as socket:
+        assert receive(socket)["type"] == "ready"
+        began = time.monotonic()
+        socket.send_json({"type": "listen_start"})
+        assert text_frame(socket) == {"type": "greeting", "text": "Hello there."}
+        assert text_frame(socket) == {"type": "listening", "active": True}
+        waited = time.monotonic() - began
+        tts.gate.set()
+
+    assert waited < 1, f"listen_start waited {waited:.1f} s behind the greeting"
+
+
+def test_a_socket_closed_mid_greeting_stops_its_synthesis(store: SessionStore) -> None:
+    tts = StalledTTS()
+    client = TestClient(
+        create_app(llm=FakeLLM(), tts=tts, stt=FakeSTT(), store=store, greeting="Hello there.")
+    )
+    key = start(client)
+
+    with client.websocket_connect(f"/ws/{key}") as socket:
+        assert receive(socket)["type"] == "ready"
+        assert text_frame(socket)["type"] == "greeting"
+        while tts.active == 0:
+            time.sleep(0.01)
+    tts.gate.set()
+
+    deadline = time.monotonic() + 3
+    while tts.active and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert tts.active == 0, "the greeting kept synthesizing for a page that had gone"
+
+
+def test_a_turn_during_the_greeting_s_synthesis_cuts_it_and_speaks_alone(
+    store: SessionStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Audio frames carry no stream id: the page plays whatever arrives between
+    a reply's `audio_start` and `audio_end`. A greeting still being made when
+    a reply starts would play inside it — so the reply cuts it. And the
+    initiative, which waits for the greeting, still starts."""
+    from voice_agent.session import Session
+
+    started: list[bool] = []
+    real_start = Session.start
+
+    def counted(self: Session) -> None:
+        started.append(True)
+        real_start(self)
+
+    monkeypatch.setattr(Session, "start", counted)
+    tts = StalledTTS()
+    llm = FakeLLM(["Sure thing, let us go."], pace=0.02)
+    client = TestClient(
+        create_app(llm=llm, tts=tts, stt=FakeSTT(), store=store, greeting="Hello there.")
+    )
+    key = start(client)
+
+    with client.websocket_connect(f"/ws/{key}") as socket:
+        assert receive(socket)["type"] == "ready"
+        assert text_frame(socket)["type"] == "greeting"
+        socket.send_json({"type": "user_message", "text": "hi"})
+        starts, audio = 0, b""
+        while (frame := receive(socket))["type"] != "audio_end" or starts < 2:
+            if frame["type"] == "audio_start":
+                starts += 1
+                if starts == 2:
+                    tts.gate.set()  # the greeting could go on now: it must not
+            elif frame["type"] == "audio_bytes" and starts == 2:
+                audio += frame["data"]
+        tts.gate.set()
+
+    # The fake voice speaks the text's own bytes, padded to whole samples.
+    assert audio.rstrip(b" \x00") == b"Sure thing, let us go.", audio
+    assert started == [True], "the initiative never started after a greeting cut short"
